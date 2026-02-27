@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "clicados-fotografia"
+  },
+  "targets": {
+    "clicados-fotografia": {
+      "hosting": {
+        "sm-kart": [
+          "sm-kart"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
