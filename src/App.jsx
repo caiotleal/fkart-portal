@@ -1,27 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronRight, Download, Home, Trophy, CheckSquare, Square, Check, X, ChevronLeft, Share2, Trash2, Maximize, Minimize, Camera, FolderOpen } from 'lucide-react';
+import { ChevronRight, Download, Home, CheckSquare, Square, Check, X, ChevronLeft, Share2, Trash2, Maximize, Minimize, Camera, FolderOpen, Flag } from 'lucide-react';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
-// --- CONFIGURAÇÕES ---
+// --- CONFIGURAÇÕES DO SERVIDOR ---
 const API_BASE = "https://script.google.com/macros/s/AKfycbxfLzrZu3oojlPUmYvRvslWHr06oSYArGBoXh51g_qT0TBHOiniRxcxDIih694bj7IU/exec?id=";
-const ID_RAIZ_RECENTES = "1ARYct3McqpPvpkwFN8KE6u3y8JK0yYOB"; 
-const ID_RAIZ_ANTIGAS = "1Pt-DZHGexJXripVI6QwVKOt5x5BGVItU";  
+const ID_RAIZ = "19eOUcFrPo3xmPj9UenxEJZ3TXkVlvNEH"; 
 
-// --- CORES DA MARCA SM COMPETITION ---
+// --- CORES DA MARCA FKART E CLICADOS NO KART ---
 const CORES = {
-  fundo: "bg-[#0A122A]",      
-  card: "bg-[#111A3A]",       
-  destaque: "text-[#E60000]", 
+  fundo: "bg-[#0A0A0A]",      
+  card: "bg-[#141414]",       
+  destaque: "text-[#E5F20D]", 
+  destaqueHover: "hover:text-[#E60000]", 
   botaoVermelho: "bg-[#E60000] hover:bg-[#CC0000]",
-  bordaVermelha: "border-[#E60000]"
+  bordaVermelha: "border-[#E60000]",
+  bordaAmarela: "border-[#E5F20D]"
 };
 
 const FOTO_PADRAO = [
-  {
-    url: "https://images.unsplash.com/photo-1547614040-39fb6783d8e5?q=80&w=2000&auto=format&fit=crop",
-    label: "SM Competition / Destaques / Capa.jpg"
-  }
+  { url: "https://images.unsplash.com/photo-1547614040-39fb6783d8e5?q=80&w=2000&auto=format&fit=crop", label: "FKART / Bem-vindo" }
 ];
 
 export default function App() {
@@ -31,6 +29,9 @@ export default function App() {
   const [viewMode, setViewMode] = useState('folders'); 
   const [path, setPath] = useState([]); 
   
+  const [showPreloader, setShowPreloader] = useState(true);
+  const [isFadingOut, setIsFadingOut] = useState(false);
+
   const [selectedPhotos, setSelectedPhotos] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [downloadingPhotoId, setDownloadingPhotoId] = useState(null);
@@ -40,114 +41,106 @@ export default function App() {
   const [isImageLoading, setIsImageLoading] = useState(false);
   
   const [cachedShareBlob, setCachedShareBlob] = useState(null);
-  
   const [heroBackgrounds, setHeroBackgrounds] = useState(FOTO_PADRAO);
   const [currentHeroBg, setCurrentHeroBg] = useState(0);
 
   const touchStart = useRef(null);
   const touchEnd = useRef(null);
 
-  // Roda o carrossel da tela inicial
   useEffect(() => {
     if (path.length > 0 || heroBackgrounds.length <= 1) return;
-    const interval = setInterval(() => {
-      setCurrentHeroBg((prev) => (prev + 1) % heroBackgrounds.length);
-    }, 4500); 
+    const interval = setInterval(() => setCurrentHeroBg((prev) => (prev + 1) % heroBackgrounds.length), 4500); 
     return () => clearInterval(interval);
   }, [path, heroBackgrounds]);
 
-  // --- BUSCA AGREGADA ---
-  const fetchDynamicHero = async (folderId, currentPath, depth = 0) => {
-    if (depth > 3) return []; 
-    try {
-        const res = await fetch(API_BASE + folderId, { method: "GET", redirect: "follow" }).then(r => r.json());
-        const arquivos = res.files || [];
-        
-        const fotos = arquivos.filter(f => f.mimeType.includes('image/'));
-        let fotosAgregadas = [];
-
-        if (fotos.length > 0) {
-            fotosAgregadas = fotos.map(f => ({
-                url: f.thumbnailLink.replace('=w800', '=w2000'),
-                label: `${currentPath} / ${f.name}` 
-            }));
-        }
-        
-        const subFolders = arquivos.filter(f => f.mimeType === "application/vnd.google-apps.folder");
-            
-        if (subFolders.length > 0) {
-            const promessas = subFolders.map(sub => fetchDynamicHero(sub.id, `${currentPath} / ${sub.name}`, depth + 1));
-            const resultados = await Promise.all(promessas);
-            resultados.forEach(resArray => {
-                fotosAgregadas = [...fotosAgregadas, ...resArray];
-            });
-        }
-        
-        return fotosAgregadas;
-    } catch (e) {
-        return [];
-    }
-  };
-
+  // Algoritmo de Triagem e Estruturação de Pastas (Baseado na Data de Criação)
   useEffect(() => {
     const initializeApp = async () => {
       setLoading(true);
       try {
-        const [resRecentes, resAntigas] = await Promise.all([
-          fetch(API_BASE + ID_RAIZ_RECENTES, { method: "GET", redirect: "follow" }).then(r => r.json()),
-          fetch(API_BASE + ID_RAIZ_ANTIGAS, { method: "GET", redirect: "follow" }).then(r => r.json())
-        ]);
+        const res = await fetch(API_BASE + ID_RAIZ, { method: "GET", redirect: "follow" }).then(r => r.json());
+        const todasAsPastas = (res.files || []).filter(f => f.mimeType === "application/vnd.google-apps.folder");
+
+        const categoriasRegras = [
+          { id: 'endurance', name: 'ENDURANCE', keys: ['endurance'], exclude: ['dia dos pais'] },
+          { id: 'copa_kgv', name: 'COPA KGV', keys: ['copa kgv'], exclude: [] },
+          { id: 'copa_itu', name: 'COPA ITU', keys: ['copa itu'], exclude: [] },
+          { id: 'itu_kids', name: 'ITU KIDS', keys: ['itu kids'], exclude: [] },
+          { id: 'endurance_pais', name: 'ENDURANCE DIA DOS PAIS', keys: ['endurance dia dos pais'], exclude: [] },
+          { id: 'fkart_old', name: 'Old School / Pilotech', keys: ['old', 'pilotech', 'piloteche'], exclude: [] },
+          { id: 'san_marino', name: 'FKART SAN MARINO', keys: ['san marino'], exclude: [] }
+        ];
 
         const anoAtual = new Date().getFullYear().toString();
-        const todasAsPastas = [
-          ...(resRecentes.files || []).filter(f => f.mimeType === "application/vnd.google-apps.folder"),
-          ...(resAntigas.files || []).filter(f => f.mimeType === "application/vnd.google-apps.folder")
-        ];
+        const menuFinal = [];
 
-        const sortNatural = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
-        const pastaDoAno = todasAsPastas.find(f => f.name.includes(anoAtual));
-        const pastasAnteriores = todasAsPastas.filter(f => !f.name.includes(anoAtual)).sort((a,b) => b.name.localeCompare(a.name, undefined, { numeric: true }));
+        categoriasRegras.forEach(cat => {
+            const pastasDestaCategoria = todasAsPastas.filter(p => {
+                const nameLower = p.name.toLowerCase();
+                const hasKey = cat.keys.some(k => nameLower.includes(k));
+                const hasExclude = cat.exclude.some(e => nameLower.includes(e));
+                return hasKey && !hasExclude;
+            });
 
-        let conteudoTemporadaAtual = [];
+            if (pastasDestaCategoria.length === 0) return; 
 
-        if (pastaDoAno) {
-            const resAnoAtual = await fetch(API_BASE + pastaDoAno.id, { method: "GET", redirect: "follow" }).then(r => r.json());
-            const subPastas = (resAnoAtual.files || []).filter(f => f.mimeType === "application/vnd.google-apps.folder").sort(sortNatural);
-            const fotosSoltas = (resAnoAtual.files || []).filter(f => f.mimeType.includes('image/')).sort(sortNatural);
+            const atual = [];
+            const anterioresPorAno = {};
 
-            conteudoTemporadaAtual = subPastas.length > 0 ? subPastas : fotosSoltas;
+            pastasDestaCategoria.forEach(p => {
+                // Interpretador dinâmico e robusto de datas do Google Drive
+                const rawDate = p.createdTime || p.dateCreated || p.createdAt || p.creationTime || p.date;
+                let anoDaPasta = anoAtual;
 
-            const rootPathName = pastaDoAno.name;
-
-            if (subPastas.length > 0) {
-                const ultimaSub = subPastas[subPastas.length - 1];
-                const todasAsFotos = await fetchDynamicHero(ultimaSub.id, `${rootPathName} / ${ultimaSub.name}`);
-                
-                if (todasAsFotos.length > 0) {
-                    const embaralhadas = todasAsFotos.sort(() => 0.5 - Math.random());
-                    setHeroBackgrounds(embaralhadas.slice(0, 15));
+                if (rawDate) {
+                    const parsedYear = new Date(rawDate).getFullYear();
+                    // Se a data for válida, extrai o ano exato
+                    if (!isNaN(parsedYear)) {
+                        anoDaPasta = parsedYear.toString();
+                    }
                 }
-            } else if (fotosSoltas.length > 0) {
-                const fotosMapeadas = fotosSoltas.map(f => ({
-                    url: f.thumbnailLink.replace('=w800', '=w2000'),
-                    label: `${rootPathName} / Geral / ${f.name}`
-                }));
-                const embaralhadas = fotosMapeadas.sort(() => 0.5 - Math.random());
-                setHeroBackgrounds(embaralhadas.slice(0, 15));
+
+                if (anoDaPasta === anoAtual) {
+                    atual.push(p);
+                } else {
+                    if (!anterioresPorAno[anoDaPasta]) anterioresPorAno[anoDaPasta] = [];
+                    anterioresPorAno[anoDaPasta].push(p);
+                }
+            });
+
+            const sortNatural = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
+            atual.sort(sortNatural);
+
+            const subItemsCategoria = [];
+            
+            if (atual.length > 0) {
+                subItemsCategoria.push({ id: `${cat.id}_atual`, name: `Temporada Atual (${anoAtual})`, subItems: atual, isCategory: true });
             }
-        }
 
-        const structured = [
-          { id: 'CAT_ATUAL', name: "Temporada Atual", subItems: conteudoTemporadaAtual, isCategory: true },
-          { id: 'CAT_ANTERIOR', name: "Temporadas Anteriores", subItems: pastasAnteriores, isCategory: true }
-        ];
+            const anosAnteriores = Object.keys(anterioresPorAno).sort((a,b) => b.localeCompare(a));
+            if (anosAnteriores.length > 0) {
+                const pastasAnterioresSeparadas = anosAnteriores.map(ano => {
+                    return { id: `${cat.id}_ant_${ano}`, name: `Temporada ${ano}`, subItems: anterioresPorAno[ano].sort(sortNatural), isCategory: true };
+                });
+                subItemsCategoria.push({ id: `${cat.id}_anteriores`, name: "Temporadas Anteriores", subItems: pastasAnterioresSeparadas.reverse(), isCategory: true });
+            }
 
-        setRootFolders(structured);
-        setItems(structured);
+            menuFinal.push({
+                id: cat.id,
+                name: cat.name,
+                subItems: subItemsCategoria,
+                isCategory: true
+            });
+        });
+
+        setRootFolders(menuFinal);
+        setItems(menuFinal);
       } catch (error) {
-        console.error("Falha na inicialização:", error);
+        console.error("Falha na inicialização da triagem:", error);
       } finally {
         setLoading(false);
+        setIsFadingOut(true);
+        setTimeout(() => setShowPreloader(false), 800);
       }
     };
     initializeApp();
@@ -157,7 +150,7 @@ export default function App() {
     if (isCategory) {
       setItems(subItems);
       setViewMode('folders');
-      setPath([{ id: folderId, name: folderName, items: subItems, mode: 'folders' }]);
+      setPath([...path, { id: folderId, name: folderName, items: subItems, mode: 'folders' }]);
       return;
     }
 
@@ -179,7 +172,7 @@ export default function App() {
       setItems(newItems);
       setViewMode(newMode);
     } catch (error) {
-      alert("A pasta solicitada está a sincronizar ou vazia. Por favor, tente novamente num instante.");
+      alert("A pasta solicitada está vazia ou carregando.");
     } finally {
       setLoading(false);
     }
@@ -217,7 +210,7 @@ export default function App() {
       saveAs(blob, data.fileName);
       return { blob, data }; 
     } catch (e) {
-        alert("Erro no download da imagem. Tente novamente.");
+        alert("Erro no download da imagem.");
     } finally {
       if(!isBatch) setDownloadingPhotoId(null);
     }
@@ -241,10 +234,10 @@ export default function App() {
         });
         await Promise.all(promises);
         const content = await zip.generateAsync({ type: "blob" });
-        saveAs(content, "SM_Kart_Galeria.zip");
+        saveAs(content, "FKART_Fotos.zip");
       }
     } catch (e) {
-        alert("Erro ao processar o download em lote.");
+        alert("Erro ao processar o ZIP.");
     } finally {
       setIsProcessing(false);
       setSelectedPhotos([]); 
@@ -253,7 +246,7 @@ export default function App() {
 
   const handleNativeShare = async (photo) => {
     setDownloadingPhotoId('share-' + photo.id);
-    const caption = "📸 @clicadosnokart\n🏁 @sm.competition";
+    const caption = "📸 @clicadosnokart\n🏁 @fkart"; 
     
     try {
       if (!navigator.share) throw new Error("Partilha não suportada.");
@@ -267,7 +260,7 @@ export default function App() {
         setCachedShareBlob(blob); 
       }
 
-      const file = new File([blob], "sm_kart_foto.jpg", { type: "image/jpeg" });
+      const file = new File([blob], "fkart_foto.jpg", { type: "image/jpeg" });
 
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ text: caption, files: [file] });
@@ -276,10 +269,10 @@ export default function App() {
       }
     } catch (error) {
       if (error.name === 'NotAllowedError' || error.message.includes('user gesture')) {
-        alert("A foto foi processada em alta qualidade! 🚀\n\nPor favor, clique em 'Partilhar' mais uma vez para abrir o menu.");
+        alert("Pronto para partilhar! Clique no botão novamente.");
       } else if (error.name !== 'AbortError') {
         await navigator.clipboard.writeText(caption).catch(()=>{});
-        alert("O seu navegador não suporta a partilha direta. O texto foi copiado.");
+        alert("O seu navegador não suporta a partilha. Texto copiado.");
         downloadSinglePhoto(photo, true);
       }
     } finally {
@@ -310,11 +303,8 @@ export default function App() {
   const onTouchEnd = () => {
     if (!touchStart.current || !touchEnd.current) return;
     const distance = touchStart.current - touchEnd.current;
-    const minSwipeDistance = 50;
-    const currentIndex = items.findIndex(p => p.id === previewPhoto.id);
-
-    if (distance > minSwipeDistance && currentIndex < items.length - 1) changePhoto(items[currentIndex + 1]);
-    if (distance < -minSwipeDistance && currentIndex > 0) changePhoto(items[currentIndex - 1]);
+    if (distance > 50 && currentPreviewIndex < items.length - 1) changePhoto(items[currentPreviewIndex + 1]);
+    if (distance < -50 && currentPreviewIndex > 0) changePhoto(items[currentPreviewIndex - 1]);
   };
 
   const currentPreviewIndex = previewPhoto ? items.findIndex(p => p.id === previewPhoto.id) : -1;
@@ -322,70 +312,48 @@ export default function App() {
   return (
     <div className={`min-h-screen ${CORES.fundo} text-white font-sans pb-24 selection:bg-[#E60000]`}>
       
-      <header className={`sticky top-0 z-40 bg-[#0A122A]/90 backdrop-blur-md border-b border-[#E60000]/30 p-4 flex justify-center md:justify-start items-center shadow-[0_4px_30px_rgba(230,0,0,0.15)]`}>
-        <img src="/SM.png" alt="SM" className="h-10 cursor-pointer hover:opacity-80 transition-opacity drop-shadow-[0_0_10px_rgba(230,0,0,0.4)]" onClick={handleGoHome} />
+      {/* PRELOADER DE VÍDEO */}
+      {showPreloader && (
+        <div className={`fixed inset-0 z-[100] bg-[#0A0A0A] transition-opacity duration-[800ms] ease-out ${isFadingOut ? 'opacity-0' : 'opacity-100'}`}>
+          <video autoPlay loop muted playsInline className="w-full h-full object-cover">
+            <source src="/fkart_inst.mp4" type="video/mp4" />
+          </video>
+        </div>
+      )}
+
+      {/* CABEÇALHO COM LOGOS LADO A LADO */}
+      <header className={`sticky top-0 z-40 bg-[#0A0A0A]/95 backdrop-blur-md border-b border-[#E60000]/30 p-4 flex justify-center md:justify-between items-center shadow-[0_4px_30px_rgba(230,0,0,0.2)]`}>
+        <div className="flex items-center gap-6" onClick={handleGoHome}>
+          <img src="/FKART_LOGO.png" alt="FKART" className="h-10 md:h-12 cursor-pointer object-contain rounded-md drop-shadow-[0_0_8px_rgba(230,0,0,0.5)]" />
+          <div className="w-px h-8 bg-white/20 hidden md:block"></div>
+          <img src="/logo_clicados_new_yellon.png" alt="Clicados no Kart" className="h-8 md:h-10 cursor-pointer object-contain drop-shadow-[0_0_8px_rgba(229,242,13,0.3)] hidden md:block" />
+        </div>
       </header>
 
       <main className="max-w-7xl mx-auto p-4 md:p-6 relative z-10">
         
-        {/* === HEADER CINEMATOGRÁFICO E QUADRO DA TELA INICIAL === */}
         {path.length === 0 && !loading && heroBackgrounds.length > 0 && (
-          <div className="mb-10">
-             
-             {/* TÍTULOS DE DESTAQUE COM EFEITOS ESPECIAIS */}
-             <div className="flex flex-col items-center justify-center mb-6 mt-2 md:mt-4 animate-in zoom-in duration-1000">
+          <div className="mb-10 animate-in zoom-in duration-1000">
+             <div className="flex flex-col items-center justify-center mb-8 mt-4">
                  <h1 className="text-3xl md:text-5xl lg:text-6xl font-black uppercase tracking-widest italic text-transparent bg-clip-text bg-gradient-to-br from-white via-gray-300 to-gray-500 drop-shadow-[0_0_15px_rgba(255,255,255,0.15)] text-center">
-                   Galeria Oficial
+                   GALERIA OFICIAL
                  </h1>
-                 <p className={`mt-2 ${CORES.destaque} font-black tracking-[0.2em] uppercase text-[10px] md:text-sm drop-shadow-[0_0_8px_rgba(230,0,0,0.6)] text-center`}>
+                 <p className={`mt-3 ${CORES.destaque} font-black tracking-[0.2em] uppercase text-xs md:text-sm drop-shadow-[0_0_8px_rgba(229,242,13,0.4)] text-center`}>
                    Powered by Clicados no Kart
                  </p>
-             </div>
-             
-             {/* O QUADRO DAS ÚLTIMAS FOTOS */}
-             <div className={`relative w-full aspect-[16/9] md:aspect-[21/9] shadow-[0_10px_40px_rgba(0,0,0,0.5)] rounded-2xl md:rounded-3xl overflow-hidden border-2 ${CORES.bordaVermelha} bg-[#050914]`}>
-               
-               {heroBackgrounds.map((bg, index) => (
-                 <div 
-                   key={index}
-                   className={`absolute inset-0 bg-cover bg-center transition-all duration-[1500ms] ease-in-out ${currentHeroBg === index ? 'opacity-100 scale-100' : 'opacity-0 scale-105'}`}
-                   style={{ backgroundImage: `url(${bg.url})` }}
-                 />
-               ))}
-               
-               {/* Degradê na base para garantir a leitura dos selos */}
-               <div className="absolute inset-x-0 bottom-0 h-32 md:h-40 bg-gradient-to-t from-[#0A122A]/90 via-[#0A122A]/40 to-transparent pointer-events-none z-20"></div>
-               
-               {/* SELOS NA BASE (AJUSTADOS PARA NÃO CORTAR NO MOBILE) */}
-               <div className="absolute bottom-3 left-3 right-3 md:bottom-5 md:left-5 md:right-5 z-30 flex items-end gap-2 md:gap-3">
-                 
-                 {/* Selo Últimas Fotos */}
-                 <span className={`${CORES.botaoVermelho} text-white text-[9px] md:text-xs font-bold px-2.5 py-1.5 md:px-4 md:py-2 rounded-full uppercase tracking-widest flex items-center gap-1.5 shadow-lg shrink-0`}>
-                   <div className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full bg-white animate-pulse"></div>
-                   Novas Fotos
-                 </span>
-
-                 {/* Caminho - Reduzido, sem truncar e quebrando linha naturalmente */}
-                 <div className="bg-black/60 backdrop-blur-md px-2.5 py-1.5 md:px-4 md:py-2 rounded-xl border border-white/10 text-[8px] sm:text-[9px] md:text-xs text-white/90 font-medium shadow-lg flex items-start gap-1.5 max-w-[65%] md:max-w-[75%] transition-all">
-                    <FolderOpen size={10} className={`${CORES.destaque} shrink-0 mt-0.5 md:mt-0 md:w-[14px] md:h-[14px]`} />
-                    <span className="leading-tight break-words whitespace-normal text-left">{heroBackgrounds[currentHeroBg]?.label}</span>
-                 </div>
-               </div>
-
              </div>
           </div>
         )}
 
-        {/* BREADCRUMBS DA NAVEGAÇÃO DE PASTAS */}
         {path.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 mb-6 text-sm md:text-base text-gray-400 font-medium">
-            <button onClick={handleGoHome} className={`hover:${CORES.destaque} flex items-center gap-1 transition-colors`}><Home size={18} /> Início</button>
+          <div className="flex flex-wrap items-center gap-2 mb-8 text-sm md:text-base text-gray-400 font-medium bg-[#141414]/50 p-3 rounded-2xl border border-white/5">
+            <button onClick={handleGoHome} className={`hover:${CORES.destaqueHover} flex items-center gap-1 transition-colors`}><Home size={18} /> Início</button>
             {path.map((step, i) => (
               <React.Fragment key={i}>
                 <ChevronRight size={16} className="text-gray-500" />
                 <span 
                   onClick={() => handleJumpToPath(i)}
-                  className={`cursor-pointer transition-colors ${i === path.length-1 ? "text-white font-bold cursor-default" : `hover:${CORES.destaque} text-gray-300`}`}
+                  className={`cursor-pointer transition-colors ${i === path.length-1 ? `${CORES.destaque} font-bold cursor-default drop-shadow-[0_0_5px_rgba(229,242,13,0.5)]` : `hover:${CORES.destaqueHover} text-gray-300`}`}
                 >
                   {step.name}
                 </span>
@@ -394,36 +362,46 @@ export default function App() {
           </div>
         )}
 
-        {/* LOADING GERAL */}
         {loading ? (
-          <div className="flex flex-col items-center justify-center py-20">
-            <div className={`w-12 h-12 border-4 border-[#111A3A] border-t-[#E60000] rounded-full animate-spin`}></div>
-            <p className="mt-6 text-xs tracking-[0.2em] text-gray-400 uppercase font-bold">Acessar Servidor...</p>
+          <div className="flex flex-col items-center justify-center py-24">
+            <div className={`w-14 h-14 border-4 border-[#141414] border-t-[#E60000] border-r-[#E5F20D] rounded-full animate-spin`}></div>
+            <p className="mt-6 text-xs tracking-[0.2em] text-gray-400 uppercase font-bold">Lendo Servidor...</p>
           </div>
         ) : (
-          <div className={viewMode === 'folders' ? "grid grid-cols-1 md:grid-cols-2 gap-6" : "grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3"}>
+          <div className={viewMode === 'folders' ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5" : "grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3"}>
             {items.map(item => {
               const isSelected = selectedPhotos.some(p => p.id === item.id);
               
               if (viewMode === 'folders') {
-                const isAtual = item.id === 'CAT_ATUAL';
+                const isMainCategory = path.length === 0;
                 return (
                   <div key={item.id} onClick={() => fetchData(item.id, item.name, item.isCategory, item.subItems)} 
-                       className={`cursor-pointer transition-all duration-300 group rounded-3xl border ${isAtual ? `border-[#E60000]/60 hover:border-[#E60000] col-span-1 md:col-span-2 p-8 md:p-12 bg-gradient-to-br from-[#111A3A] to-[#0A122A] shadow-[0_0_30px_rgba(230,0,0,0.15)]` : `border-white/10 hover:border-[#E60000]/50 p-6 md:p-8 ${CORES.card}`}`}>
-                    <FolderOpen className={`${CORES.destaque} mb-4 transition-transform duration-500 group-hover:scale-110 ${isAtual ? 'w-12 h-12 md:w-16 md:h-16 drop-shadow-[0_0_15px_rgba(230,0,0,0.5)]' : 'w-10 h-10'}`} /> 
-                    <h3 className={`font-black uppercase italic tracking-wide ${isAtual ? 'text-2xl md:text-4xl text-white' : 'text-xl text-gray-200'}`}>{item.name}</h3>
-                    <p className="text-gray-400 text-xs md:text-sm mt-3 font-medium flex items-center gap-2">
-                      <Camera size={16} className={CORES.destaque} /> Clique para abrir
-                    </p>
+                       className={`cursor-pointer transition-all duration-300 group rounded-2xl border border-white/10 p-6 md:p-8 ${CORES.card} hover:bg-[#1A1A1A] hover:border-[#E60000]/60 shadow-lg hover:shadow-[0_0_25px_rgba(230,0,0,0.2)] flex flex-col items-center justify-center text-center`}>
+                    
+                    {isMainCategory ? (
+                      <Flag className={`mb-4 w-12 h-12 text-[#E60000] transition-transform duration-500 group-hover:scale-110 group-hover:text-[#E5F20D]`} />
+                    ) : (
+                      <FolderOpen className={`mb-4 w-10 h-10 ${CORES.destaque} transition-transform duration-500 group-hover:scale-110`} /> 
+                    )}
+                    
+                    <h3 className={`font-black uppercase italic tracking-wider text-lg md:text-xl text-white group-hover:text-[#E5F20D] transition-colors`}>
+                      {item.name}
+                    </h3>
+                    
+                    {!isMainCategory && !item.isCategory && (
+                      <p className="text-gray-400 text-xs md:text-sm mt-3 font-medium flex items-center gap-2">
+                        <Camera size={16} className="text-[#E60000]" /> Acessar Galeria
+                      </p>
+                    )}
                   </div>
                 );
               }
 
               return (
-                <div key={item.id} className={`relative aspect-[4/5] rounded-xl overflow-hidden border-2 cursor-pointer transition-all duration-200 ${isSelected ? `${CORES.bordaVermelha} shadow-[0_0_20px_rgba(230,0,0,0.4)]` : 'border-transparent hover:border-white/30'}`}>
+                <div key={item.id} className={`relative aspect-[4/5] rounded-xl overflow-hidden border-2 cursor-pointer transition-all duration-200 ${isSelected ? `${CORES.bordaAmarela} shadow-[0_0_20px_rgba(229,242,13,0.3)]` : 'border-transparent hover:border-[#E60000]/50'}`}>
                   <img src={item.thumbnailLink} loading="lazy" className="w-full h-full object-cover" onClick={(e) => { e.stopPropagation(); changePhoto(item); }} />
                   <div onClick={(e) => { e.stopPropagation(); setSelectedPhotos(prev => isSelected ? prev.filter(p => p.id !== item.id) : [...prev, item]) }} 
-                       className={`absolute top-2 right-2 p-2 rounded-lg transition-all shadow-md backdrop-blur-sm ${isSelected ? `${CORES.botaoVermelho} text-white` : 'bg-black/60 text-white/80 hover:bg-black/90 border border-white/20'}`}>
+                       className={`absolute top-2 right-2 p-2 rounded-lg transition-all shadow-md backdrop-blur-sm ${isSelected ? `bg-[#E5F20D] text-black` : 'bg-black/60 text-white/80 hover:bg-[#E60000] hover:text-white border border-white/20'}`}>
                     {isSelected ? <CheckSquare size={18} /> : <Square size={18} />}
                   </div>
                 </div>
@@ -433,103 +411,76 @@ export default function App() {
         )}
       </main>
 
-      {/* LIGHTBOX DE ALTA IMERSÃO */}
+      {/* MODAL DE FOTO EM TELA CHEIA (Otimizado e Menos Poluído) */}
       {previewPhoto && (
-        <div className="fixed inset-0 z-50 bg-[#050914] flex flex-col items-center justify-center" 
+        <div className="fixed inset-0 z-50 bg-[#0A0A0A] flex flex-col items-center justify-center" 
              onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
            
-           <div className="absolute top-0 left-0 w-full p-4 flex justify-between items-start z-[70] bg-gradient-to-b from-black/80 via-black/40 to-transparent pointer-events-none">
-             
-             <div className="pointer-events-auto bg-black/60 px-4 py-2.5 rounded-xl backdrop-blur-md border border-white/10 shadow-2xl max-w-[75%] md:max-w-[85%] flex items-center overflow-hidden">
-                <div className="flex items-center gap-1.5 md:gap-2 text-[10px] md:text-sm font-semibold whitespace-nowrap overflow-x-auto scrollbar-hide">
-                  <Home size={14} className={CORES.destaque} />
-                  {path.map((step, i) => (
-                    <React.Fragment key={i}>
-                      <ChevronRight size={14} className="text-gray-500 opacity-70 flex-shrink-0" />
-                      <span className="text-gray-300">{step.name}</span>
-                    </React.Fragment>
-                  ))}
+           {/* Barra Superior do Modal - FIXA NO TOPO */}
+           <div className="fixed top-0 left-0 w-full p-3 md:p-4 flex justify-between items-start z-[70] bg-gradient-to-b from-black/90 via-black/40 to-transparent pointer-events-none">
+             <div className="pointer-events-auto bg-black/80 px-3 py-2 rounded-xl backdrop-blur-md border border-white/10 shadow-xl max-w-[75%] md:max-w-[85%] flex items-center overflow-hidden">
+                <div className="flex items-center gap-1.5 md:gap-2 text-[10px] md:text-xs font-semibold whitespace-nowrap overflow-x-auto scrollbar-hide">
+                  <span className={`${CORES.destaque}`}>{path[path.length-1]?.name || 'Galeria'}</span>
                   <ChevronRight size={14} className="text-gray-500 opacity-70 flex-shrink-0" />
                   <span className="text-white font-bold tracking-wide">{previewPhoto.name}</span>
                 </div>
              </div>
-
              <div className="flex gap-2 pointer-events-auto flex-shrink-0 ml-2">
-               <button onClick={toggleFullscreen} className="text-white/80 hover:text-white p-2.5 md:p-3 rounded-full hover:bg-white/10 transition-all hidden md:block bg-black/40 backdrop-blur-md border border-white/5">
-                 {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+               <button onClick={toggleFullscreen} className="text-white/80 hover:text-[#E5F20D] p-1.5 md:p-2 rounded-full bg-black/60 backdrop-blur-md border border-white/10 transition-colors hidden md:block">
+                 {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
                </button>
-               <button onClick={() => { setPreviewPhoto(null); if(isFullscreen) toggleFullscreen(); }} className={`text-white/80 hover:${CORES.destaque} p-2.5 md:p-3 rounded-full hover:bg-white/10 transition-all bg-black/40 backdrop-blur-md border border-white/5`}>
-                 <X size={24} />
+               <button onClick={() => { setPreviewPhoto(null); if(isFullscreen) toggleFullscreen(); }} className={`text-white/80 hover:text-[#E60000] p-1.5 md:p-2 rounded-full bg-black/60 backdrop-blur-md border border-white/10 transition-colors`}>
+                 <X size={20} />
                </button>
              </div>
            </div>
            
+           {/* Imagem Central */}
            <div className="relative flex items-center justify-center w-full flex-grow h-full overflow-hidden">
               <button onClick={() => currentPreviewIndex > 0 && changePhoto(items[currentPreviewIndex - 1])} 
-                      className={`absolute left-2 lg:left-8 p-4 text-white/40 hover:text-white hidden md:block z-[60] transition-all hover:bg-white/10 rounded-full ${currentPreviewIndex === 0 && 'opacity-0 pointer-events-none'}`}>
-                  <ChevronLeft size={48} />
+                      className={`absolute left-2 lg:left-8 p-3 text-white/40 hover:text-[#E5F20D] hidden md:block z-[60] transition-colors rounded-full ${currentPreviewIndex === 0 && 'opacity-0 pointer-events-none'}`}>
+                  <ChevronLeft size={36} />
               </button>
-              
               <div className="relative w-full h-full flex items-center justify-center">
-                 {isImageLoading && (
-                     <div className="absolute inset-0 flex items-center justify-center z-40">
-                         <div className={`w-12 h-12 border-4 border-white/10 border-t-[#E60000] rounded-full animate-spin`}></div>
-                     </div>
-                 )}
-                 <img 
-                    src={previewPhoto.thumbnailLink.replace('=w800', '=s0')} 
-                    className={`max-w-full max-h-full object-contain select-none transition-opacity duration-300 ease-in-out ${isImageLoading ? 'opacity-0' : 'opacity-100'}`}
-                    onLoad={() => setIsImageLoading(false)} 
-                 />
+                 {isImageLoading && <div className="absolute inset-0 flex items-center justify-center z-40"><div className="w-8 h-8 border-4 border-white/10 border-t-[#E60000] rounded-full animate-spin"></div></div>}
+                 <img src={previewPhoto.thumbnailLink.replace('=w800', '=s0')} className={`max-w-full max-h-full object-contain select-none transition-opacity duration-300 ease-in-out ${isImageLoading ? 'opacity-0' : 'opacity-100'}`} onLoad={() => setIsImageLoading(false)} />
               </div>
-
               <button onClick={() => currentPreviewIndex < items.length - 1 && changePhoto(items[currentPreviewIndex + 1])} 
-                      className={`absolute right-2 lg:right-8 p-4 text-white/40 hover:text-white hidden md:block z-[60] transition-all hover:bg-white/10 rounded-full ${currentPreviewIndex === items.length - 1 && 'opacity-0 pointer-events-none'}`}>
-                  <ChevronRight size={48} />
+                      className={`absolute right-2 lg:right-8 p-3 text-white/40 hover:text-[#E5F20D] hidden md:block z-[60] transition-colors rounded-full ${currentPreviewIndex === items.length - 1 && 'opacity-0 pointer-events-none'}`}>
+                  <ChevronRight size={36} />
               </button>
            </div>
 
-           <div className="pb-8 pt-6 flex flex-wrap justify-center gap-3 md:gap-4 w-full px-4 bg-gradient-to-t from-[#050914] via-[#050914]/90 to-transparent z-[60]">
-              <button onClick={() => { setSelectedPhotos(prev => prev.some(p => p.id === previewPhoto.id) ? prev.filter(p => p.id !== previewPhoto.id) : [...prev, previewPhoto]) }} 
-                      className={`px-5 md:px-6 py-3 rounded-full text-sm font-bold border flex items-center gap-2 transition-all shadow-lg ${selectedPhotos.some(p => p.id === previewPhoto.id) ? `${CORES.botaoVermelho} ${CORES.bordaVermelha} text-white` : 'border-white/20 text-gray-200 hover:bg-white/10 hover:text-white backdrop-blur-md bg-[#111A3A]/40'}`}>
-                {selectedPhotos.some(p => p.id === previewPhoto.id) ? <Check size={20} /> : <Square size={20} />} 
+           {/* Botões de Ação Inferiores - MENORES E FIXOS */}
+           <div className="fixed bottom-0 left-0 pb-4 pt-8 flex flex-wrap justify-center gap-2 md:gap-3 w-full px-4 bg-gradient-to-t from-[#0A0A0A] via-[#0A0A0A]/90 to-transparent z-[70]">
+              <button onClick={() => setSelectedPhotos(prev => prev.some(p => p.id === previewPhoto.id) ? prev.filter(p => p.id !== previewPhoto.id) : [...prev, previewPhoto])} 
+                      className={`px-4 py-2 md:px-5 md:py-2 rounded-full text-[11px] md:text-xs font-bold border flex items-center gap-1.5 transition-all shadow-lg ${selectedPhotos.some(p => p.id === previewPhoto.id) ? `bg-[#E5F20D] border-[#E5F20D] text-black` : 'border-white/20 text-gray-200 hover:bg-white/10 bg-[#141414]/80'}`}>
+                {selectedPhotos.some(p => p.id === previewPhoto.id) ? <Check size={16} /> : <Square size={16} />} 
                 <span className="hidden md:inline">{selectedPhotos.some(p => p.id === previewPhoto.id) ? 'Selecionada' : 'Selecionar'}</span>
               </button>
               
-              <button onClick={() => downloadSinglePhoto(previewPhoto)} className="px-5 md:px-6 py-3 rounded-full text-sm font-bold bg-white/10 text-white border border-white/20 hover:bg-white/20 flex items-center gap-2 transition-all backdrop-blur-md">
-                {downloadingPhotoId === previewPhoto.id ? <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin"></div> : <Download size={20} />} 
+              <button onClick={() => downloadSinglePhoto(previewPhoto)} className="px-4 py-2 md:px-5 md:py-2 rounded-full text-[11px] md:text-xs font-bold bg-[#141414]/80 text-white border border-white/20 hover:border-[#E5F20D] hover:text-[#E5F20D] flex items-center gap-1.5 transition-colors">
+                {downloadingPhotoId === previewPhoto.id ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div> : <Download size={16} />} 
                 <span className="hidden md:inline">Download</span>
               </button>
-
-              <button onClick={() => handleNativeShare(previewPhoto)} className={`px-5 md:px-6 py-3 rounded-full text-sm font-bold bg-[#111A3A] text-white border border-white/20 hover:border-[#E60000] hover:bg-[#E60000]/20 flex items-center gap-2 transition-all backdrop-blur-md`}>
-                {downloadingPhotoId === 'share-' + previewPhoto.id ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Share2 size={20} className={CORES.destaque} />} 
+              
+              <button onClick={() => handleNativeShare(previewPhoto)} className={`px-4 py-2 md:px-5 md:py-2 rounded-full text-[11px] md:text-xs font-bold ${CORES.botaoVermelho} text-white border border-[#E60000] flex items-center gap-1.5 transition-colors shadow-[0_0_10px_rgba(230,0,0,0.4)]`}>
+                {downloadingPhotoId === 'share-' + previewPhoto.id ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Share2 size={16} />} 
                 <span className="hidden md:inline">Partilhar</span>
               </button>
            </div>
         </div>
       )}
 
-      {/* CARRINHO DE DOWNLOAD FLUTUANTE COM ALERTA */}
+      {/* BARRA FLUTUANTE DE DOWNLOAD EM LOTE */}
       {selectedPhotos.length > 0 && !previewPhoto && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-40 animate-in slide-in-from-bottom-4 duration-300">
-          
-          {selectedPhotos.length > 10 && (
-            <div className="bg-[#E60000]/90 text-white text-[11px] md:text-xs px-4 py-1.5 rounded-full backdrop-blur-md shadow-[0_5px_15px_rgba(230,0,0,0.3)] font-bold tracking-wider uppercase">
-               Acima de 10 fotos o arquivo será em ZIP
-            </div>
-          )}
-
           <div className={`${CORES.card} text-white border border-white/20 pl-6 pr-4 py-3 rounded-full shadow-[0_15px_50px_rgba(0,0,0,0.9)] flex items-center gap-4 backdrop-blur-xl`}>
-            <span className="font-bold text-sm tracking-wide">{selectedPhotos.length} {selectedPhotos.length === 1 ? 'Foto' : 'Fotos'}</span>
-            
-            <button onClick={() => setSelectedPhotos([])} className={`p-2 text-gray-400 hover:${CORES.destaque} transition-colors rounded-full hover:bg-white/10`} title="Limpar Seleção">
-              <Trash2 size={20} />
-            </button>
-            
+            <span className="font-bold text-sm tracking-wide text-[#E5F20D]">{selectedPhotos.length} {selectedPhotos.length === 1 ? 'Foto' : 'Fotos'}</span>
+            <button onClick={() => setSelectedPhotos([])} className={`p-2 text-gray-400 hover:text-[#E60000] transition-colors rounded-full hover:bg-white/5`} title="Limpar Seleção"><Trash2 size={20} /></button>
             <div className="w-px h-6 bg-white/20 mx-1"></div>
-
             <button onClick={handleBatchDownload} disabled={isProcessing} className={`${CORES.botaoVermelho} text-white px-6 py-2.5 rounded-full text-sm font-bold flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(230,0,0,0.5)]`}>
-              {isProcessing ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> A Processar...</> : <><Download size={18} /> Baixar {selectedPhotos.length > 10 ? 'ZIP' : 'Tudo'}</>}
+              {isProcessing ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> A Processar...</> : <><Download size={18} /> Baixar Tudo</>}
             </button>
           </div>
         </div>
