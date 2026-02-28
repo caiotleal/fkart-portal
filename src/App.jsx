@@ -1,13 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ChevronRight, Download, Home, CheckSquare, Square, Check, X, ChevronLeft, Share2, Trash2, Maximize, Minimize, Camera, FolderOpen, Flag } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { ChevronRight, Download, Home, CheckSquare, Square, Check, X, ChevronLeft, Share2, Trash2, Maximize, Minimize, Camera, FolderOpen, Flag, Lock, Unlock, Edit3, AlertCircle } from 'lucide-react';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
 // --- CONFIGURAÇÕES DO SERVIDOR ---
-const API_BASE = "https://script.google.com/macros/s/AKfycbxfLzrZu3oojlPUmYvRvslWHr06oSYArGBoXh51g_qT0TBHOiniRxcxDIih694bj7IU/exec?id=";
+const API_URL = "https://script.google.com/macros/s/AKfycbzSzYlXwWeJxd1pUQSI26FWct5rsbBro92Mhjik9prZz14U-lHFmNXGwET3ANEESaHD/exec";
 const ID_RAIZ = "19eOUcFrPo3xmPj9UenxEJZ3TXkVlvNEH"; 
 
-// --- CORES DA MARCA FKART E CLICADOS NO KART ---
 const CORES = {
   fundo: "bg-[#0A0A0A]",      
   card: "bg-[#141414]",       
@@ -44,8 +43,29 @@ export default function App() {
   const [heroBackgrounds, setHeroBackgrounds] = useState(FOTO_PADRAO);
   const [currentHeroBg, setCurrentHeroBg] = useState(0);
 
+  // Estados de Administração
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginData, setLoginData] = useState({ user: '', pass: '' });
+  
+  // Estados de Edição em Lote (Cache)
+  const [pendingRenames, setPendingRenames] = useState({});
+  const [isSavingRenames, setIsSavingRenames] = useState(false);
+
   const touchStart = useRef(null);
   const touchEnd = useRef(null);
+
+  // Previne a saída da página se houver alterações não salvas
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (Object.keys(pendingRenames).length > 0) {
+        e.preventDefault();
+        e.returnValue = ''; // Exigido pelo navegador para mostrar o alerta nativo
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [pendingRenames]);
 
   useEffect(() => {
     if (path.length > 0 || heroBackgrounds.length <= 1) return;
@@ -53,98 +73,125 @@ export default function App() {
     return () => clearInterval(interval);
   }, [path, heroBackgrounds]);
 
-  // Algoritmo de Triagem e Estruturação de Pastas (Baseado na Data de Criação)
-  useEffect(() => {
-    const initializeApp = async () => {
-      setLoading(true);
-      try {
-        const res = await fetch(API_BASE + ID_RAIZ, { method: "GET", redirect: "follow" }).then(r => r.json());
-        const todasAsPastas = (res.files || []).filter(f => f.mimeType === "application/vnd.google-apps.folder");
+  // Função centralizada para carregar/recarregar dados sem perder a sessão
+  const loadRootData = useCallback(async (isInitial = false) => {
+    if (isInitial) setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}?id=${ID_RAIZ}`, { method: "GET", redirect: "follow" }).then(r => r.json());
+      const todasAsPastas = (res.files || []).filter(f => f.mimeType === "application/vnd.google-apps.folder");
 
-        const categoriasRegras = [
-          { id: 'endurance', name: 'ENDURANCE', keys: ['endurance'], exclude: ['dia dos pais'] },
-          { id: 'copa_kgv', name: 'COPA KGV', keys: ['copa kgv'], exclude: [] },
-          { id: 'copa_itu', name: 'COPA ITU', keys: ['copa itu'], exclude: [] },
-          { id: 'itu_kids', name: 'ITU KIDS', keys: ['itu kids'], exclude: [] },
-          { id: 'endurance_pais', name: 'ENDURANCE DIA DOS PAIS', keys: ['endurance dia dos pais'], exclude: [] },
-          { id: 'fkart_old', name: 'Old School / Pilotech', keys: ['old', 'pilotech', 'piloteche'], exclude: [] },
-          { id: 'san_marino', name: 'FKART SAN MARINO', keys: ['san marino'], exclude: [] }
-        ];
+      const categoriasRegras = [
+        { id: 'endurance', name: 'ENDURANCE', keys: ['endurance'], exclude: ['dia dos pais'] },
+        { id: 'copa_kgv', name: 'COPA KGV', keys: ['copa kgv'], exclude: [] },
+        { id: 'copa_itu', name: 'COPA ITU', keys: ['copa itu'], exclude: [] },
+        { id: 'itu_kids', name: 'ITU KIDS', keys: ['itu kids'], exclude: [] },
+        { id: 'endurance_pais', name: 'ENDURANCE DIA DOS PAIS', keys: ['endurance dia dos pais'], exclude: [] },
+        { id: 'fkart_old', name: 'Old School / Pilotech', keys: ['old', 'pilotech', 'piloteche'], exclude: [] },
+        { id: 'san_marino', name: 'FKART SAN MARINO', keys: ['san marino'], exclude: [] }
+      ];
 
-        const anoAtual = new Date().getFullYear().toString();
-        const menuFinal = [];
+      const anoAtual = new Date().getFullYear().toString();
+      const menuFinal = [];
+      const pastasAtribuidas = new Set(); 
 
-        categoriasRegras.forEach(cat => {
-            const pastasDestaCategoria = todasAsPastas.filter(p => {
-                const nameLower = p.name.toLowerCase();
-                const hasKey = cat.keys.some(k => nameLower.includes(k));
-                const hasExclude = cat.exclude.some(e => nameLower.includes(e));
-                return hasKey && !hasExclude;
-            });
+      categoriasRegras.forEach(cat => {
+          const pastasDestaCategoria = todasAsPastas.filter(p => {
+              const nameLower = p.name.toLowerCase();
+              const hasKey = cat.keys.some(k => nameLower.includes(k));
+              const hasExclude = cat.exclude.some(e => nameLower.includes(e));
+              
+              if (hasKey && !hasExclude) {
+                  pastasAtribuidas.add(p.id);
+                  return true;
+              }
+              return false;
+          });
 
-            if (pastasDestaCategoria.length === 0) return; 
+          if (pastasDestaCategoria.length === 0) return; 
 
-            const atual = [];
-            const anterioresPorAno = {};
+          const atual = [];
+          const anterioresPorAno = {};
 
-            pastasDestaCategoria.forEach(p => {
-                // Interpretador dinâmico e robusto de datas do Google Drive
-                const rawDate = p.createdTime || p.dateCreated || p.createdAt || p.creationTime || p.date;
-                let anoDaPasta = anoAtual;
+          pastasDestaCategoria.forEach(p => {
+              let anoDaPasta = p.createdTime ? p.createdTime.substring(0, 4) : "Sem Data";
+              if (anoDaPasta === anoAtual) atual.push(p);
+              else {
+                  if (!anterioresPorAno[anoDaPasta]) anterioresPorAno[anoDaPasta] = [];
+                  anterioresPorAno[anoDaPasta].push(p);
+              }
+          });
 
-                if (rawDate) {
-                    const parsedYear = new Date(rawDate).getFullYear();
-                    // Se a data for válida, extrai o ano exato
-                    if (!isNaN(parsedYear)) {
-                        anoDaPasta = parsedYear.toString();
-                    }
-                }
+          const sortNatural = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
+          atual.sort(sortNatural);
 
-                if (anoDaPasta === anoAtual) {
-                    atual.push(p);
-                } else {
-                    if (!anterioresPorAno[anoDaPasta]) anterioresPorAno[anoDaPasta] = [];
-                    anterioresPorAno[anoDaPasta].push(p);
-                }
-            });
+          const subItemsCategoria = [];
+          if (atual.length > 0) subItemsCategoria.push({ id: `${cat.id}_atual`, name: `Temporada Atual (${anoAtual})`, subItems: atual, isCategory: true });
 
-            const sortNatural = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
-            atual.sort(sortNatural);
+          const anosAnteriores = Object.keys(anterioresPorAno).sort((a,b) => b.localeCompare(a));
+          if (anosAnteriores.length > 0) {
+              const pastasAnterioresSeparadas = anosAnteriores.map(ano => {
+                  const nomeTemporada = ano === "Sem Data" ? "Outras Temporadas" : `Temporada ${ano}`;
+                  return { id: `${cat.id}_ant_${ano}`, name: nomeTemporada, subItems: anterioresPorAno[ano].sort(sortNatural), isCategory: true };
+              });
+              subItemsCategoria.push({ id: `${cat.id}_anteriores`, name: "Temporadas Anteriores", subItems: pastasAnterioresSeparadas.reverse(), isCategory: true });
+          }
 
-            const subItemsCategoria = [];
-            
-            if (atual.length > 0) {
-                subItemsCategoria.push({ id: `${cat.id}_atual`, name: `Temporada Atual (${anoAtual})`, subItems: atual, isCategory: true });
-            }
+          menuFinal.push({ id: cat.id, name: cat.name, subItems: subItemsCategoria, isCategory: true });
+      });
 
-            const anosAnteriores = Object.keys(anterioresPorAno).sort((a,b) => b.localeCompare(a));
-            if (anosAnteriores.length > 0) {
-                const pastasAnterioresSeparadas = anosAnteriores.map(ano => {
-                    return { id: `${cat.id}_ant_${ano}`, name: `Temporada ${ano}`, subItems: anterioresPorAno[ano].sort(sortNatural), isCategory: true };
-                });
-                subItemsCategoria.push({ id: `${cat.id}_anteriores`, name: "Temporadas Anteriores", subItems: pastasAnterioresSeparadas.reverse(), isCategory: true });
-            }
+      // LÓGICA DO FALLBACK: OUTROS EVENTOS
+      const pastasRestantes = todasAsPastas.filter(p => !pastasAtribuidas.has(p.id));
+      if (pastasRestantes.length > 0) {
+          const atualRestantes = [];
+          const anterioresRestantesPorAno = {};
 
-            menuFinal.push({
-                id: cat.id,
-                name: cat.name,
-                subItems: subItemsCategoria,
-                isCategory: true
-            });
-        });
+          pastasRestantes.forEach(p => {
+              let anoDaPasta = p.createdTime ? p.createdTime.substring(0, 4) : "Sem Data";
+              if (anoDaPasta === anoAtual) atualRestantes.push(p);
+              else {
+                  if (!anterioresRestantesPorAno[anoDaPasta]) anterioresRestantesPorAno[anoDaPasta] = [];
+                  anterioresRestantesPorAno[anoDaPasta].push(p);
+              }
+          });
 
-        setRootFolders(menuFinal);
-        setItems(menuFinal);
-      } catch (error) {
-        console.error("Falha na inicialização da triagem:", error);
-      } finally {
+          const sortNatural = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
+          atualRestantes.sort(sortNatural);
+
+          const subItemsOutros = [];
+          if (atualRestantes.length > 0) subItemsOutros.push({ id: `outros_atual`, name: `Temporada Atual (${anoAtual})`, subItems: atualRestantes, isCategory: true });
+
+          const anosOutros = Object.keys(anterioresRestantesPorAno).sort((a,b) => b.localeCompare(a));
+          if (anosOutros.length > 0) {
+              const subPastasOutros = anosOutros.map(ano => {
+                  const nomeTemporada = ano === "Sem Data" ? "Outras Temporadas" : `Temporada ${ano}`;
+                  return { id: `outros_ant_${ano}`, name: nomeTemporada, subItems: anterioresRestantesPorAno[ano].sort(sortNatural), isCategory: true };
+              });
+              subItemsOutros.push({ id: `outros_anteriores`, name: "Temporadas Anteriores", subItems: subPastasOutros.reverse(), isCategory: true });
+          }
+
+          menuFinal.push({ id: 'outros_eventos', name: 'OUTROS EVENTOS', subItems: subItemsOutros, isCategory: true });
+      }
+
+      setRootFolders(menuFinal);
+      // Retorna à raiz visualmente para resetar os estados alterados
+      setItems(menuFinal);
+      setPath([]);
+      setViewMode('folders');
+      
+    } catch (error) {
+      console.error("Falha na inicialização da triagem:", error);
+    } finally {
+      if (isInitial) {
         setLoading(false);
         setIsFadingOut(true);
         setTimeout(() => setShowPreloader(false), 800);
       }
-    };
-    initializeApp();
+    }
   }, []);
+
+  useEffect(() => {
+    loadRootData(true);
+  }, [loadRootData]);
 
   const fetchData = async (folderId, folderName, isCategory = false, subItems = []) => {
     if (isCategory) {
@@ -156,9 +203,8 @@ export default function App() {
 
     setLoading(true);
     try {
-      const res = await fetch(API_BASE + folderId, { method: "GET", redirect: "follow" });
+      const res = await fetch(`${API_URL}?id=${folderId}`, { method: "GET", redirect: "follow" });
       const data = await res.json();
-      
       if (data.error) throw new Error(data.error);
 
       const sortNatural = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
@@ -175,6 +221,57 @@ export default function App() {
       alert("A pasta solicitada está vazia ou carregando.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // --- Funções de Administração ---
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (loginData.user === 'caioleal' && loginData.pass === '123456') {
+      setIsAdmin(true);
+      setShowLoginModal(false);
+      setLoginData({ user: '', pass: '' });
+    } else {
+      alert("Credenciais incorretas.");
+    }
+  };
+
+  const handleQueueRename = (folderId, currentName, e) => {
+    e.stopPropagation();
+    const displayValue = pendingRenames[folderId] || currentName;
+    const newName = window.prompt("Digite o novo nome da pasta:", displayValue);
+    
+    if (newName === null) return; // Cancelou o prompt
+    
+    if (newName.trim() === currentName) {
+      // Se digitou igual ao original, remove dos pendentes
+      const updated = { ...pendingRenames };
+      delete updated[folderId];
+      setPendingRenames(updated);
+    } else if (newName.trim() !== "") {
+      // Adiciona ao cache local
+      setPendingRenames(prev => ({ ...prev, [folderId]: newName.trim() }));
+    }
+  };
+
+  const handleConfirmAllRenames = async () => {
+    setIsSavingRenames(true);
+    try {
+      // Processa o lote (Batch) um por um no servidor do Google
+      for (const [folderId, newName] of Object.entries(pendingRenames)) {
+        const renameUrl = `${API_URL}?action=rename&folderId=${folderId}&newName=${encodeURIComponent(newName)}`;
+        await fetch(renameUrl, { method: "GET", redirect: "follow" });
+      }
+      
+      // Limpa os rascunhos locais e recarrega os dados silenciosamente
+      setPendingRenames({});
+      await loadRootData(false);
+      
+    } catch (err) {
+      console.error(err);
+      alert("Houve um problema ao salvar algumas pastas no Google Drive.");
+    } finally {
+      setIsSavingRenames(false);
     }
   };
 
@@ -203,7 +300,7 @@ export default function App() {
   const downloadSinglePhoto = async (photo, isBatch = false) => {
     if(!isBatch) setDownloadingPhotoId(photo.id);
     try {
-      const downloadUrl = API_BASE.replace('?id=', '?downloadId=') + photo.id;
+      const downloadUrl = `${API_URL}?downloadId=${photo.id}`;
       const res = await fetch(downloadUrl, { method: "GET", redirect: "follow" });
       const data = await res.json();
       const blob = base64ToBlob(data.base64, data.mimeType);
@@ -227,7 +324,7 @@ export default function App() {
       } else {
         const zip = new JSZip();
         const promises = selectedPhotos.map(async (photo) => {
-          const downloadUrl = API_BASE.replace('?id=', '?downloadId=') + photo.id;
+          const downloadUrl = `${API_URL}?downloadId=${photo.id}`;
           const res = await fetch(downloadUrl, { method: "GET", redirect: "follow" });
           const data = await res.json();
           zip.file(data.fileName, data.base64, { base64: true });
@@ -253,7 +350,7 @@ export default function App() {
       let blob = cachedShareBlob;
       
       if (!blob) {
-        const downloadUrl = API_BASE.replace('?id=', '?downloadId=') + photo.id;
+        const downloadUrl = `${API_URL}?downloadId=${photo.id}`;
         const res = await fetch(downloadUrl);
         const data = await res.json();
         blob = base64ToBlob(data.base64, data.mimeType || "image/jpeg");
@@ -308,11 +405,11 @@ export default function App() {
   };
 
   const currentPreviewIndex = previewPhoto ? items.findIndex(p => p.id === previewPhoto.id) : -1;
+  const totalPending = Object.keys(pendingRenames).length;
 
   return (
     <div className={`min-h-screen ${CORES.fundo} text-white font-sans pb-24 selection:bg-[#E60000]`}>
       
-      {/* PRELOADER DE VÍDEO */}
       {showPreloader && (
         <div className={`fixed inset-0 z-[100] bg-[#0A0A0A] transition-opacity duration-[800ms] ease-out ${isFadingOut ? 'opacity-0' : 'opacity-100'}`}>
           <video autoPlay loop muted playsInline className="w-full h-full object-cover">
@@ -321,17 +418,57 @@ export default function App() {
         </div>
       )}
 
-      {/* CABEÇALHO COM LOGOS LADO A LADO */}
-      <header className={`sticky top-0 z-40 bg-[#0A0A0A]/95 backdrop-blur-md border-b border-[#E60000]/30 p-4 flex justify-center md:justify-between items-center shadow-[0_4px_30px_rgba(230,0,0,0.2)]`}>
-        <div className="flex items-center gap-6" onClick={handleGoHome}>
-          <img src="/FKART_LOGO.png" alt="FKART" className="h-10 md:h-12 cursor-pointer object-contain rounded-md drop-shadow-[0_0_8px_rgba(230,0,0,0.5)]" />
-          <div className="w-px h-8 bg-white/20 hidden md:block"></div>
-          <img src="/logo_clicados_new_yellon.png" alt="Clicados no Kart" className="h-8 md:h-10 cursor-pointer object-contain drop-shadow-[0_0_8px_rgba(229,242,13,0.3)] hidden md:block" />
+      {/* Modal de Login Restrito */}
+      {showLoginModal && (
+        <div className="fixed inset-0 z-[110] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-[#141414] border border-[#E60000]/50 p-6 md:p-8 rounded-2xl max-w-sm w-full shadow-[0_0_50px_rgba(230,0,0,0.2)]">
+             <h2 className="text-xl md:text-2xl font-black text-white mb-6 flex items-center gap-3 italic tracking-wider"><Lock size={24} className="text-[#E60000]"/> ACESSO RESTRITO</h2>
+             <form onSubmit={handleLogin}>
+                <input type="text" placeholder="Usuário" value={loginData.user} onChange={e => setLoginData({...loginData, user: e.target.value})} className="w-full mb-4 p-4 bg-black border border-white/10 rounded-xl text-white outline-none focus:border-[#E5F20D] transition-colors" />
+                <input type="password" placeholder="Senha" value={loginData.pass} onChange={e => setLoginData({...loginData, pass: e.target.value})} className="w-full mb-6 p-4 bg-black border border-white/10 rounded-xl text-white outline-none focus:border-[#E5F20D] transition-colors" />
+                <div className="flex gap-3">
+                   <button type="button" onClick={() => setShowLoginModal(false)} className="flex-1 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 text-white font-bold transition-colors">Cancelar</button>
+                   <button type="submit" className={`flex-1 py-3.5 rounded-xl ${CORES.botaoVermelho} text-white font-bold transition-colors shadow-[0_0_15px_rgba(230,0,0,0.4)]`}>Entrar</button>
+                </div>
+             </form>
+          </div>
         </div>
+      )}
+
+      {/* Barra de Ações Fixa (Batch Renaming) */}
+      {totalPending > 0 && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[80] animate-in slide-in-from-top-10 duration-300 w-full max-w-[90%] md:max-w-max">
+          <div className="bg-[#141414]/95 border border-[#E5F20D] pl-5 pr-3 py-2 rounded-full shadow-[0_15px_50px_rgba(229,242,13,0.15)] flex flex-wrap items-center justify-between gap-4 backdrop-blur-xl">
+            <div className="flex items-center gap-2 text-[#E5F20D] font-bold text-sm tracking-wide">
+              <AlertCircle size={18} />
+              <span>{totalPending} edição(ões) pendente(s)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setPendingRenames({})} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-xs font-bold rounded-full hover:bg-white/5">
+                Cancelar
+              </button>
+              <button onClick={handleConfirmAllRenames} disabled={isSavingRenames} className={`bg-[#E5F20D] text-black px-5 py-2 rounded-full text-xs font-black flex items-center gap-2 transition-all hover:bg-white ${isSavingRenames ? 'opacity-70 cursor-wait' : ''}`}>
+                {isSavingRenames ? <div className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin"/> : <Check size={16} />}
+                {isSavingRenames ? 'Salvando...' : 'Salvar no Google'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <header className={`sticky top-0 z-40 bg-[#0A0A0A]/95 backdrop-blur-md border-b border-[#E60000]/30 p-4 flex justify-between items-center shadow-[0_4px_30px_rgba(230,0,0,0.2)]`}>
+        <div className="flex items-center gap-4 md:gap-6" onClick={handleGoHome}>
+          <img src="/FKART_LOGO.png" alt="FKART" className="h-8 md:h-12 cursor-pointer object-contain rounded-md drop-shadow-[0_0_8px_rgba(230,0,0,0.5)]" />
+          <div className="w-px h-6 md:h-8 bg-white/20 hidden md:block"></div>
+          <img src="/logo_clicados_new_yellon.png" alt="Clicados no Kart" className="h-6 md:h-10 cursor-pointer object-contain drop-shadow-[0_0_8px_rgba(229,242,13,0.3)] hidden md:block" />
+        </div>
+        
+        <button onClick={() => isAdmin ? setIsAdmin(false) : setShowLoginModal(true)} title="Modo de Edição" className={`p-2 rounded-full transition-colors ${isAdmin ? 'text-[#E5F20D] bg-white/5' : 'text-white/20 hover:text-white/60'}`}>
+          {isAdmin ? <Unlock size={20} /> : <Lock size={20} />}
+        </button>
       </header>
 
       <main className="max-w-7xl mx-auto p-4 md:p-6 relative z-10">
-        
         {path.length === 0 && !loading && heroBackgrounds.length > 0 && (
           <div className="mb-10 animate-in zoom-in duration-1000">
              <div className="flex flex-col items-center justify-center mb-8 mt-4">
@@ -374,25 +511,39 @@ export default function App() {
               
               if (viewMode === 'folders') {
                 const isMainCategory = path.length === 0;
+                
+                // Aplica o cache visual otimista: se tiver pendente de edição, mostra o nome novo.
+                const isPending = pendingRenames[item.id] !== undefined;
+                const displayName = isPending ? pendingRenames[item.id] : item.name;
+
                 return (
-                  <div key={item.id} onClick={() => fetchData(item.id, item.name, item.isCategory, item.subItems)} 
-                       className={`cursor-pointer transition-all duration-300 group rounded-2xl border border-white/10 p-6 md:p-8 ${CORES.card} hover:bg-[#1A1A1A] hover:border-[#E60000]/60 shadow-lg hover:shadow-[0_0_25px_rgba(230,0,0,0.2)] flex flex-col items-center justify-center text-center`}>
+                  <div key={item.id} className={`relative transition-all duration-300 group rounded-2xl border ${isPending ? 'border-[#E5F20D]' : 'border-white/10'} ${CORES.card} hover:bg-[#1A1A1A] hover:border-[#E60000]/60 shadow-lg hover:shadow-[0_0_25px_rgba(230,0,0,0.2)] flex flex-col items-center justify-center text-center overflow-hidden`}>
                     
-                    {isMainCategory ? (
-                      <Flag className={`mb-4 w-12 h-12 text-[#E60000] transition-transform duration-500 group-hover:scale-110 group-hover:text-[#E5F20D]`} />
-                    ) : (
-                      <FolderOpen className={`mb-4 w-10 h-10 ${CORES.destaque} transition-transform duration-500 group-hover:scale-110`} /> 
+                    {isAdmin && !item.isCategory && !isMainCategory && (
+                      <button onClick={(e) => handleQueueRename(item.id, displayName, e)} className="absolute top-3 right-3 p-2.5 bg-black/80 border border-white/10 hover:bg-[#E5F20D] hover:text-black rounded-full text-white/70 transition-colors z-20 shadow-md" title="Editar Nome (Lote)">
+                        <Edit3 size={16} />
+                      </button>
                     )}
-                    
-                    <h3 className={`font-black uppercase italic tracking-wider text-lg md:text-xl text-white group-hover:text-[#E5F20D] transition-colors`}>
-                      {item.name}
-                    </h3>
-                    
-                    {!isMainCategory && !item.isCategory && (
-                      <p className="text-gray-400 text-xs md:text-sm mt-3 font-medium flex items-center gap-2">
-                        <Camera size={16} className="text-[#E60000]" /> Acessar Galeria
-                      </p>
-                    )}
+
+                    <div onClick={() => fetchData(item.id, item.name, item.isCategory, item.subItems)} className="w-full h-full p-6 md:p-8 flex flex-col items-center justify-center cursor-pointer">
+                      {isMainCategory ? (
+                        <Flag className={`mb-4 w-12 h-12 ${item.id === 'outros_eventos' ? 'text-gray-500 group-hover:text-gray-300' : 'text-[#E60000] group-hover:text-[#E5F20D]'} transition-transform duration-500 group-hover:scale-110`} />
+                      ) : (
+                        <FolderOpen className={`mb-4 w-10 h-10 ${isPending ? 'text-[#E5F20D]' : CORES.destaque} transition-transform duration-500 group-hover:scale-110`} /> 
+                      )}
+                      
+                      <h3 className={`font-black uppercase italic tracking-wider text-lg md:text-xl ${isPending ? 'text-[#E5F20D]' : (item.id === 'outros_eventos' ? 'text-gray-300' : 'text-white')} group-hover:text-[#E5F20D] transition-colors px-4`}>
+                        {displayName}
+                      </h3>
+                      
+                      {isPending && <span className="text-[10px] text-[#E5F20D] font-bold tracking-widest uppercase mt-1">Não Salvo</span>}
+                      
+                      {!isMainCategory && !item.isCategory && !isPending && (
+                        <p className="text-gray-400 text-xs md:text-sm mt-3 font-medium flex items-center gap-2">
+                          <Camera size={16} className="text-[#E60000]" /> Acessar Galeria
+                        </p>
+                      )}
+                    </div>
                   </div>
                 );
               }
@@ -401,8 +552,8 @@ export default function App() {
                 <div key={item.id} className={`relative aspect-[4/5] rounded-xl overflow-hidden border-2 cursor-pointer transition-all duration-200 ${isSelected ? `${CORES.bordaAmarela} shadow-[0_0_20px_rgba(229,242,13,0.3)]` : 'border-transparent hover:border-[#E60000]/50'}`}>
                   <img src={item.thumbnailLink} loading="lazy" className="w-full h-full object-cover" onClick={(e) => { e.stopPropagation(); changePhoto(item); }} />
                   <div onClick={(e) => { e.stopPropagation(); setSelectedPhotos(prev => isSelected ? prev.filter(p => p.id !== item.id) : [...prev, item]) }} 
-                       className={`absolute top-2 right-2 p-2 rounded-lg transition-all shadow-md backdrop-blur-sm ${isSelected ? `bg-[#E5F20D] text-black` : 'bg-black/60 text-white/80 hover:bg-[#E60000] hover:text-white border border-white/20'}`}>
-                    {isSelected ? <CheckSquare size={18} /> : <Square size={18} />}
+                       className={`absolute top-2 right-2 p-1.5 md:p-2 rounded-lg transition-all shadow-md backdrop-blur-sm ${isSelected ? `bg-[#E5F20D] text-black` : 'bg-black/60 text-white/80 hover:bg-[#E60000] hover:text-white border border-white/20'}`}>
+                    {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
                   </div>
                 </div>
               );
@@ -411,76 +562,72 @@ export default function App() {
         )}
       </main>
 
-      {/* MODAL DE FOTO EM TELA CHEIA (Otimizado e Menos Poluído) */}
+      {/* MODAL DE FOTO EM TELA CHEIA */}
       {previewPhoto && (
         <div className="fixed inset-0 z-50 bg-[#0A0A0A] flex flex-col items-center justify-center" 
              onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
            
-           {/* Barra Superior do Modal - FIXA NO TOPO */}
-           <div className="fixed top-0 left-0 w-full p-3 md:p-4 flex justify-between items-start z-[70] bg-gradient-to-b from-black/90 via-black/40 to-transparent pointer-events-none">
-             <div className="pointer-events-auto bg-black/80 px-3 py-2 rounded-xl backdrop-blur-md border border-white/10 shadow-xl max-w-[75%] md:max-w-[85%] flex items-center overflow-hidden">
-                <div className="flex items-center gap-1.5 md:gap-2 text-[10px] md:text-xs font-semibold whitespace-nowrap overflow-x-auto scrollbar-hide">
+           <div className="fixed top-0 left-0 w-full p-2 md:p-3 flex justify-between items-start z-[70] bg-gradient-to-b from-black/90 via-black/40 to-transparent pointer-events-none">
+             <div className="pointer-events-auto bg-black/80 px-3 py-1.5 rounded-lg backdrop-blur-md border border-white/10 shadow-xl max-w-[75%] md:max-w-[85%] flex items-center overflow-hidden">
+                <div className="flex items-center gap-1.5 text-[9px] md:text-[11px] font-semibold whitespace-nowrap overflow-x-auto scrollbar-hide">
                   <span className={`${CORES.destaque}`}>{path[path.length-1]?.name || 'Galeria'}</span>
-                  <ChevronRight size={14} className="text-gray-500 opacity-70 flex-shrink-0" />
-                  <span className="text-white font-bold tracking-wide">{previewPhoto.name}</span>
+                  <ChevronRight size={12} className="text-gray-500 opacity-70 flex-shrink-0" />
+                  <span className="text-white tracking-wide">{previewPhoto.name}</span>
                 </div>
              </div>
-             <div className="flex gap-2 pointer-events-auto flex-shrink-0 ml-2">
-               <button onClick={toggleFullscreen} className="text-white/80 hover:text-[#E5F20D] p-1.5 md:p-2 rounded-full bg-black/60 backdrop-blur-md border border-white/10 transition-colors hidden md:block">
-                 {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+             <div className="flex gap-1.5 pointer-events-auto flex-shrink-0 ml-2">
+               <button onClick={toggleFullscreen} className="text-white/80 hover:text-[#E5F20D] p-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 transition-colors hidden md:block">
+                 {isFullscreen ? <Minimize size={14} /> : <Maximize size={14} />}
                </button>
-               <button onClick={() => { setPreviewPhoto(null); if(isFullscreen) toggleFullscreen(); }} className={`text-white/80 hover:text-[#E60000] p-1.5 md:p-2 rounded-full bg-black/60 backdrop-blur-md border border-white/10 transition-colors`}>
-                 <X size={20} />
+               <button onClick={() => { setPreviewPhoto(null); if(isFullscreen) toggleFullscreen(); }} className={`text-white/80 hover:text-[#E60000] p-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 transition-colors`}>
+                 <X size={16} />
                </button>
              </div>
            </div>
            
-           {/* Imagem Central */}
            <div className="relative flex items-center justify-center w-full flex-grow h-full overflow-hidden">
               <button onClick={() => currentPreviewIndex > 0 && changePhoto(items[currentPreviewIndex - 1])} 
-                      className={`absolute left-2 lg:left-8 p-3 text-white/40 hover:text-[#E5F20D] hidden md:block z-[60] transition-colors rounded-full ${currentPreviewIndex === 0 && 'opacity-0 pointer-events-none'}`}>
-                  <ChevronLeft size={36} />
+                      className={`absolute left-2 lg:left-6 p-2 text-white/40 hover:text-[#E5F20D] hidden md:block z-[60] transition-colors rounded-full ${currentPreviewIndex === 0 && 'opacity-0 pointer-events-none'}`}>
+                  <ChevronLeft size={28} />
               </button>
               <div className="relative w-full h-full flex items-center justify-center">
-                 {isImageLoading && <div className="absolute inset-0 flex items-center justify-center z-40"><div className="w-8 h-8 border-4 border-white/10 border-t-[#E60000] rounded-full animate-spin"></div></div>}
+                 {isImageLoading && <div className="absolute inset-0 flex items-center justify-center z-40"><div className="w-6 h-6 border-2 border-white/10 border-t-[#E60000] rounded-full animate-spin"></div></div>}
                  <img src={previewPhoto.thumbnailLink.replace('=w800', '=s0')} className={`max-w-full max-h-full object-contain select-none transition-opacity duration-300 ease-in-out ${isImageLoading ? 'opacity-0' : 'opacity-100'}`} onLoad={() => setIsImageLoading(false)} />
               </div>
               <button onClick={() => currentPreviewIndex < items.length - 1 && changePhoto(items[currentPreviewIndex + 1])} 
-                      className={`absolute right-2 lg:right-8 p-3 text-white/40 hover:text-[#E5F20D] hidden md:block z-[60] transition-colors rounded-full ${currentPreviewIndex === items.length - 1 && 'opacity-0 pointer-events-none'}`}>
-                  <ChevronRight size={36} />
+                      className={`absolute right-2 lg:right-6 p-2 text-white/40 hover:text-[#E5F20D] hidden md:block z-[60] transition-colors rounded-full ${currentPreviewIndex === items.length - 1 && 'opacity-0 pointer-events-none'}`}>
+                  <ChevronRight size={28} />
               </button>
            </div>
 
-           {/* Botões de Ação Inferiores - MENORES E FIXOS */}
-           <div className="fixed bottom-0 left-0 pb-4 pt-8 flex flex-wrap justify-center gap-2 md:gap-3 w-full px-4 bg-gradient-to-t from-[#0A0A0A] via-[#0A0A0A]/90 to-transparent z-[70]">
+           <div className="fixed bottom-0 left-0 pb-4 pt-6 flex flex-wrap justify-center gap-2 w-full px-2 bg-gradient-to-t from-[#0A0A0A] via-[#0A0A0A]/90 to-transparent z-[70]">
               <button onClick={() => setSelectedPhotos(prev => prev.some(p => p.id === previewPhoto.id) ? prev.filter(p => p.id !== previewPhoto.id) : [...prev, previewPhoto])} 
-                      className={`px-4 py-2 md:px-5 md:py-2 rounded-full text-[11px] md:text-xs font-bold border flex items-center gap-1.5 transition-all shadow-lg ${selectedPhotos.some(p => p.id === previewPhoto.id) ? `bg-[#E5F20D] border-[#E5F20D] text-black` : 'border-white/20 text-gray-200 hover:bg-white/10 bg-[#141414]/80'}`}>
-                {selectedPhotos.some(p => p.id === previewPhoto.id) ? <Check size={16} /> : <Square size={16} />} 
+                      className={`px-3 py-1.5 md:px-4 md:py-1.5 rounded-full text-[10px] md:text-[11px] font-bold border flex items-center gap-1.5 transition-all shadow-md ${selectedPhotos.some(p => p.id === previewPhoto.id) ? `bg-[#E5F20D] border-[#E5F20D] text-black` : 'border-white/20 text-gray-200 hover:bg-white/10 bg-[#141414]/80'}`}>
+                {selectedPhotos.some(p => p.id === previewPhoto.id) ? <Check size={14} /> : <Square size={14} />} 
                 <span className="hidden md:inline">{selectedPhotos.some(p => p.id === previewPhoto.id) ? 'Selecionada' : 'Selecionar'}</span>
               </button>
               
-              <button onClick={() => downloadSinglePhoto(previewPhoto)} className="px-4 py-2 md:px-5 md:py-2 rounded-full text-[11px] md:text-xs font-bold bg-[#141414]/80 text-white border border-white/20 hover:border-[#E5F20D] hover:text-[#E5F20D] flex items-center gap-1.5 transition-colors">
-                {downloadingPhotoId === previewPhoto.id ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div> : <Download size={16} />} 
+              <button onClick={() => downloadSinglePhoto(previewPhoto)} className="px-3 py-1.5 md:px-4 md:py-1.5 rounded-full text-[10px] md:text-[11px] font-bold bg-[#141414]/80 text-white border border-white/20 hover:border-[#E5F20D] hover:text-[#E5F20D] flex items-center gap-1.5 transition-colors">
+                {downloadingPhotoId === previewPhoto.id ? <div className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin"></div> : <Download size={14} />} 
                 <span className="hidden md:inline">Download</span>
               </button>
               
-              <button onClick={() => handleNativeShare(previewPhoto)} className={`px-4 py-2 md:px-5 md:py-2 rounded-full text-[11px] md:text-xs font-bold ${CORES.botaoVermelho} text-white border border-[#E60000] flex items-center gap-1.5 transition-colors shadow-[0_0_10px_rgba(230,0,0,0.4)]`}>
-                {downloadingPhotoId === 'share-' + previewPhoto.id ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Share2 size={16} />} 
+              <button onClick={() => handleNativeShare(previewPhoto)} className={`px-3 py-1.5 md:px-4 md:py-1.5 rounded-full text-[10px] md:text-[11px] font-bold ${CORES.botaoVermelho} text-white border border-[#E60000] flex items-center gap-1.5 transition-colors shadow-[0_0_8px_rgba(230,0,0,0.4)]`}>
+                {downloadingPhotoId === 'share-' + previewPhoto.id ? <div className="w-3.5 h-3.5 border border-white border-t-transparent rounded-full animate-spin"></div> : <Share2 size={14} />} 
                 <span className="hidden md:inline">Partilhar</span>
               </button>
            </div>
         </div>
       )}
 
-      {/* BARRA FLUTUANTE DE DOWNLOAD EM LOTE */}
       {selectedPhotos.length > 0 && !previewPhoto && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-40 animate-in slide-in-from-bottom-4 duration-300">
-          <div className={`${CORES.card} text-white border border-white/20 pl-6 pr-4 py-3 rounded-full shadow-[0_15px_50px_rgba(0,0,0,0.9)] flex items-center gap-4 backdrop-blur-xl`}>
-            <span className="font-bold text-sm tracking-wide text-[#E5F20D]">{selectedPhotos.length} {selectedPhotos.length === 1 ? 'Foto' : 'Fotos'}</span>
-            <button onClick={() => setSelectedPhotos([])} className={`p-2 text-gray-400 hover:text-[#E60000] transition-colors rounded-full hover:bg-white/5`} title="Limpar Seleção"><Trash2 size={20} /></button>
-            <div className="w-px h-6 bg-white/20 mx-1"></div>
-            <button onClick={handleBatchDownload} disabled={isProcessing} className={`${CORES.botaoVermelho} text-white px-6 py-2.5 rounded-full text-sm font-bold flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(230,0,0,0.5)]`}>
-              {isProcessing ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> A Processar...</> : <><Download size={18} /> Baixar Tudo</>}
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-[60] animate-in slide-in-from-bottom-4 duration-300">
+          <div className={`${CORES.card} text-white border border-white/20 pl-4 pr-3 py-2 rounded-full shadow-[0_15px_50px_rgba(0,0,0,0.9)] flex items-center gap-3 backdrop-blur-xl`}>
+            <span className="font-bold text-xs tracking-wide text-[#E5F20D]">{selectedPhotos.length} {selectedPhotos.length === 1 ? 'Foto' : 'Fotos'}</span>
+            <button onClick={() => setSelectedPhotos([])} className={`p-1.5 text-gray-400 hover:text-[#E60000] transition-colors rounded-full hover:bg-white/5`} title="Limpar Seleção"><Trash2 size={16} /></button>
+            <div className="w-px h-4 bg-white/20 mx-0.5"></div>
+            <button onClick={handleBatchDownload} disabled={isProcessing} className={`${CORES.botaoVermelho} text-white px-4 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_15px_rgba(230,0,0,0.5)]`}>
+              {isProcessing ? <><div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin"/> Processando...</> : <><Download size={14} /> Baixar Tudo</>}
             </button>
           </div>
         </div>

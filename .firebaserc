@@ -7,6 +7,9 @@
       "hosting": {
         "sm-kart": [
           "sm-kart"
+        ],
+        "fkart": [
+          "fkart-fotos"
         ]
       }
     }

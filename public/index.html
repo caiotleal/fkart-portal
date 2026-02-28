@@ -1,233 +1,27 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <title>Fotos Grupo FKART</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- META TAGS DE COMPARTILHAMENTO -->
-  <meta property="og:title" content="Grupo FKART - Galeria de Fotos" />
-  <meta property="og:description" content="Acesse as fotos oficiais das corridas com a galeria SM Kart." />
-  <meta property="og:image" content="https://sm-kart.web.app/Clicados_Insta.jpg" />
-  <meta property="og:url" content="https://sm-kart.web.app/" />
-  <meta property="og:type" content="website" />
+  <head>
+    <meta charset="UTF-8" />
+    
+    <link rel="icon" type="image/png" href="/logo_clicados_new_yellon.png" />
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-  <!-- Twitter (opcional) -->
-  <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:image" content="https://sm-kart.web.app/Clicados_Insta.jpg" />
-  <meta name="twitter:title" content="Grupo FKART- Galeria de Fotos" />
-  <meta name="twitter:description" content="Acesse as fotos oficiais das corridas com a galeria SM Kart." />
-  <style>
+    <title>CLICADOS NO KART - FKART</title>
+    
+    <meta property="og:title" content="CLICADOS NO KART - FKART" />
+    <meta property="og:description" content="Acesse as fotos oficiais das corridas da FKART. Powered by Clicados no Kart." />
+    <meta property="og:image" content="https://fkart-fotos.web.app/logo_clicados_new_yellon.png" /> 
+    <meta property="og:url" content="https://fkart-fotos.web.app/" />
+    <meta property="og:type" content="website" />
 
-  .logo {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 30px;
-  }
-
-  .logo img {
-    max-width: 80%;
-    width: 100%;
-    height: auto;
-  }
-
-  body {
-    margin: 0;
-    font-family: Arial, sans-serif;
-    background: url('SM_QUINTA_BAST_1243.jpg') no-repeat center center fixed;
-    background-size: cover;
-    color: white;
-  }
-
-  .menu-anos {
-    display: flex;
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 10px;
-    margin-bottom: 15px;
-  }
-
-  .menu-anos button {
-    background: rgba(255, 255, 255, 0.2);
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    color: white;
-    padding: 10px 18px;
-    border-radius: 20px;
-    cursor: pointer;
-    transition: background 0.3s;
-  }
-
-  .menu-anos button:hover {
-    background: rgba(255, 255, 255, 0.4);
-  }
-
-
-  .pasta-container {
-    max-width: 800px;
-    margin: 0 auto;
-    background: rgba(255, 255, 255, 0.2);
-    backdrop-filter: blur(10px);
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
-  }
-
-  .pasta-item {
-    padding: 8px 12px;
-    margin-bottom: 6px;
-    border-bottom: 1px solid rgba(255,255,255,0.2);
-    cursor: pointer;
-    color: white;
-    transition: background 0.3s;
-  }
-
-  .pasta-item:hover {
-    background: rgba(255, 255, 255, 0.15);
-  }
-
-  h2 {
-    text-align: center;
-    margin-top: 0;
-  }
-  </style>
-</head>
-<body>
-
-<!-- Logotipo -->
-<div class="logo">
-  <img src="SM.png" alt="SM Competition Logo">
-</div>
-
-
-<!-- Menu de Anos -->
-<div class="menu-anos" id="menuAnos">Carregando pastas...</div>
-
-<!-- Lista de Pastas -->
-<div class="pasta-container">
-  <div id="listaPastas"></div>
-</div>
-
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<script>
-const apiBase = "https://us-central1-clicados-fotografia.cloudfunctions.net/api/listar-arquivos/";
-const rootFolderIds = [
-  { id: "1ARYct3McqpPvpkwFN8KE6u3y8JK0yYOB", origem: "Pasta 1" },
-  { id: "1Pt-DZHGexJXripVI6QwVKOt5x5BGVItU", origem: "Pasta 2" }
-];
-
-const meses = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
-
-function ordenarPorAno(folders) {
-  const comAno = [];
-  const semAno = [];
-
-  folders.forEach(folder => {
-    const matchAno = folder.name.match(/\b(20\d{2})\b/);
-    if (matchAno) {
-      comAno.push({ folder, ano: parseInt(matchAno[1]) });
-    } else {
-      semAno.push(folder);
-    }
-  });
-
-  comAno.sort((a, b) => a.ano - b.ano);
-  return [...comAno.map(f => f.folder), ...semAno];
-}
-
-function ordenarPorMes(folders) {
-  const comMes = [];
-  const semMes = [];
-
-  folders.forEach(folder => {
-    const nome = folder.name.toLowerCase();
-    const index = meses.findIndex(m => nome.includes(m));
-    if (index !== -1) {
-      comMes.push({ folder, mesIndex: index });
-    } else {
-      semMes.push(folder);
-    }
-  });
-
-  comMes.sort((a, b) => a.mesIndex - b.mesIndex);
-  return [...comMes.map(f => f.folder), ...semMes];
-}
-
-function carregarMenu() {
-  const menu = $("#menuAnos");
-  menu.empty();
-
-  let todasPastas = [];
-  let carregadas = 0;
-  let ultimaPasta = null;
-  let ultimaData = 0;
-
-  rootFolderIds.forEach(folderInfo => {
-    $.get(apiBase + folderInfo.id, function (data) {
-      const pastas = data.files.filter(f => f.mimeType === "application/vnd.google-apps.folder");
-
-      pastas.forEach(p => {
-        p.origem = folderInfo.origem;
-        const modTime = new Date(p.modifiedTime).getTime();
-        if (modTime > ultimaData) {
-          ultimaData = modTime;
-          ultimaPasta = p;
-        }
-      });
-
-      todasPastas.push(...pastas);
-
-      carregadas++;
-      if (carregadas === rootFolderIds.length) {
-        const pastasOrdenadas = ordenarPorAno(todasPastas);
-
-        if (pastasOrdenadas.length === 0) {
-          menu.text("Nenhuma pasta encontrada.");
-          return;
-        }
-
-        pastasOrdenadas.forEach(pasta => {
-          const btn = $("<button>")
-            .text(`${pasta.name}`)
-            .click(() => carregarPastas(pasta.id));
-          menu.append(btn);
-        });
-
-        if (ultimaPasta) {
-          $("#btnNovasFotos").click(() => {
-            window.open(`https://drive.google.com/drive/folders/${ultimaPasta.id}`, '_blank');
-          });
-        }
-      }
-    });
-  });
-}
-
-function carregarPastas(folderId) {
-  $("#listaPastas").html("<p>Carregando...</p>");
-  $.get(apiBase + folderId, function (data) {
-    const subpastas = data.files.filter(f => f.mimeType === "application/vnd.google-apps.folder");
-    const pastasOrdenadas = ordenarPorMes(subpastas);
-
-    if (pastasOrdenadas.length === 0) {
-      window.open(`https://drive.google.com/drive/folders/${folderId}`, '_blank');
-      $("#listaPastas").html("");
-      return;
-    }
-
-    $("#listaPastas").html("");
-    pastasOrdenadas.forEach(pasta => {
-      const div = $("<div>").addClass("pasta-item").text(pasta.name);
-      div.click(() => carregarPastas(pasta.id));
-      $("#listaPastas").append(div);
-    });
-  });
-}
-
-// Início
-$(document).ready(() => {
-  carregarMenu();
-});
-</script>
-
-</body>
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="CLICADOS NO KART - FKART" />
+    <meta name="twitter:description" content="Acesse as fotos oficiais das corridas da FKART." />
+    <meta name="twitter:image" content="https://fkart-fotos.web.app/logo_clicados_new_yellon.png" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>
