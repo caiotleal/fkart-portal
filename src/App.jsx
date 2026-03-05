@@ -4,7 +4,7 @@ import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
 // --- CONFIGURAÇÕES DO SERVIDOR ---
-const API_URL = "https://script.google.com/macros/s/AKfycbzSzYlXwWeJxd1pUQSI26FWct5rsbBro92Mhjik9prZz14U-lHFmNXGwET3ANEESaHD/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzJlFnLUj35s3ArXyiODqJofuPKNubEOyn26UqeHehA9Y27myOKYO04Ef8O3Eoo-0J0Qw/exec";
 const ID_RAIZ = "19eOUcFrPo3xmPj9UenxEJZ3TXkVlvNEH"; 
 
 const CORES = {
@@ -43,24 +43,21 @@ export default function App() {
   const [heroBackgrounds, setHeroBackgrounds] = useState(FOTO_PADRAO);
   const [currentHeroBg, setCurrentHeroBg] = useState(0);
 
-  // Estados de Administração
   const [isAdmin, setIsAdmin] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
   
-  // Estados de Edição em Lote (Cache)
   const [pendingRenames, setPendingRenames] = useState({});
   const [isSavingRenames, setIsSavingRenames] = useState(false);
 
   const touchStart = useRef(null);
   const touchEnd = useRef(null);
 
-  // Previne a saída da página se houver alterações não salvas
   useEffect(() => {
     const handleBeforeUnload = (e) => {
       if (Object.keys(pendingRenames).length > 0) {
         e.preventDefault();
-        e.returnValue = ''; // Exigido pelo navegador para mostrar o alerta nativo
+        e.returnValue = '';
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -73,9 +70,26 @@ export default function App() {
     return () => clearInterval(interval);
   }, [path, heroBackgrounds]);
 
-  // Função centralizada para carregar/recarregar dados sem perder a sessão
-  const loadRootData = useCallback(async (isInitial = false) => {
-    if (isInitial) setLoading(true);
+  // A LÓGICA DE SEGUNDO PLANO (Stale-While-Revalidate)
+  const loadRootData = useCallback(async () => {
+    
+    // 1. APRESENTAÇÃO IMEDIATA (O Milissegundo 1)
+    const localCache = localStorage.getItem('fkart_menu_cache');
+    let isFirstTime = true;
+
+    if (localCache) {
+      const parsedCache = JSON.parse(localCache);
+      setRootFolders(parsedCache);
+      setItems(parsedCache); 
+      setLoading(false);     
+      setIsFadingOut(true);
+      setTimeout(() => setShowPreloader(false), 400); 
+      isFirstTime = false;
+    } else {
+      setLoading(true); 
+    }
+
+    // 2. CONSTRUÇÃO DA ESTRUTURA EM SEGUNDO PLANO (Silencioso)
     try {
       const res = await fetch(`${API_URL}?id=${ID_RAIZ}`, { method: "GET", redirect: "follow" }).then(r => r.json());
       const todasAsPastas = (res.files || []).filter(f => f.mimeType === "application/vnd.google-apps.folder");
@@ -139,7 +153,6 @@ export default function App() {
           menuFinal.push({ id: cat.id, name: cat.name, subItems: subItemsCategoria, isCategory: true });
       });
 
-      // LÓGICA DO FALLBACK: OUTROS EVENTOS
       const pastasRestantes = todasAsPastas.filter(p => !pastasAtribuidas.has(p.id));
       if (pastasRestantes.length > 0) {
           const atualRestantes = [];
@@ -172,25 +185,31 @@ export default function App() {
           menuFinal.push({ id: 'outros_eventos', name: 'OUTROS EVENTOS', subItems: subItemsOutros, isCategory: true });
       }
 
+      // 3. ATUALIZAÇÃO INVISÍVEL
       setRootFolders(menuFinal);
-      // Retorna à raiz visualmente para resetar os estados alterados
-      setItems(menuFinal);
-      setPath([]);
-      setViewMode('folders');
+      localStorage.setItem('fkart_menu_cache', JSON.stringify(menuFinal)); // Renova a memória do cliente
       
+      // Inteligência: Só injeta na tela atual se o usuário ainda estiver na Home
+      setPath(currentPath => {
+        if (currentPath.length === 0) {
+          setItems(menuFinal);
+        }
+        return currentPath;
+      });
+
     } catch (error) {
-      console.error("Falha na inicialização da triagem:", error);
+      console.error("Falha na varredura de segundo plano:", error);
     } finally {
-      if (isInitial) {
+      if (isFirstTime) {
         setLoading(false);
         setIsFadingOut(true);
         setTimeout(() => setShowPreloader(false), 800);
       }
     }
-  }, []);
+  }, []); // Sem dependências para não ficar rodando em loop atoa
 
   useEffect(() => {
-    loadRootData(true);
+    loadRootData();
   }, [loadRootData]);
 
   const fetchData = async (folderId, folderName, isCategory = false, subItems = []) => {
@@ -224,7 +243,6 @@ export default function App() {
     }
   };
 
-  // --- Funções de Administração ---
   const handleLogin = (e) => {
     e.preventDefault();
     if (loginData.user === 'caioleal' && loginData.pass === '123456') {
@@ -241,15 +259,13 @@ export default function App() {
     const displayValue = pendingRenames[folderId] || currentName;
     const newName = window.prompt("Digite o novo nome da pasta:", displayValue);
     
-    if (newName === null) return; // Cancelou o prompt
+    if (newName === null) return; 
     
     if (newName.trim() === currentName) {
-      // Se digitou igual ao original, remove dos pendentes
       const updated = { ...pendingRenames };
       delete updated[folderId];
       setPendingRenames(updated);
     } else if (newName.trim() !== "") {
-      // Adiciona ao cache local
       setPendingRenames(prev => ({ ...prev, [folderId]: newName.trim() }));
     }
   };
@@ -257,15 +273,15 @@ export default function App() {
   const handleConfirmAllRenames = async () => {
     setIsSavingRenames(true);
     try {
-      // Processa o lote (Batch) um por um no servidor do Google
       for (const [folderId, newName] of Object.entries(pendingRenames)) {
-        const renameUrl = `${API_URL}?action=rename&folderId=${folderId}&newName=${encodeURIComponent(newName)}`;
+        const renameUrl = `${API_URL}?action=rename_folder&folderId=${folderId}&newName=${encodeURIComponent(newName)}`;
         await fetch(renameUrl, { method: "GET", redirect: "follow" });
       }
       
-      // Limpa os rascunhos locais e recarrega os dados silenciosamente
       setPendingRenames({});
-      await loadRootData(false);
+      // Força limpar o cache local para ele ver o nome novo instantaneamente na raiz
+      localStorage.removeItem('fkart_menu_cache');
+      await loadRootData();
       
     } catch (err) {
       console.error(err);
@@ -300,12 +316,14 @@ export default function App() {
   const downloadSinglePhoto = async (photo, isBatch = false) => {
     if(!isBatch) setDownloadingPhotoId(photo.id);
     try {
-      const downloadUrl = `${API_URL}?downloadId=${photo.id}`;
-      const res = await fetch(downloadUrl, { method: "GET", redirect: "follow" });
-      const data = await res.json();
-      const blob = base64ToBlob(data.base64, data.mimeType);
-      saveAs(blob, data.fileName);
-      return { blob, data }; 
+      const directUrl = `https://drive.google.com/uc?export=download&id=${photo.id}`;
+      const link = document.createElement('a');
+      link.href = directUrl;
+      link.target = '_blank'; 
+      link.download = photo.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     } catch (e) {
         alert("Erro no download da imagem.");
     } finally {
@@ -319,22 +337,20 @@ export default function App() {
       if (selectedPhotos.length <= 10) {
         for (const photo of selectedPhotos) {
           await downloadSinglePhoto(photo, true);
-          await new Promise(r => setTimeout(r, 300)); 
+          await new Promise(r => setTimeout(r, 800)); 
         }
       } else {
-        const zip = new JSZip();
-        const promises = selectedPhotos.map(async (photo) => {
-          const downloadUrl = `${API_URL}?downloadId=${photo.id}`;
-          const res = await fetch(downloadUrl, { method: "GET", redirect: "follow" });
-          const data = await res.json();
-          zip.file(data.fileName, data.base64, { base64: true });
-        });
-        await Promise.all(promises);
-        const content = await zip.generateAsync({ type: "blob" });
-        saveAs(content, "FKART_Fotos.zip");
+        const fileIds = selectedPhotos.map(p => p.id).join(',');
+        const res = await fetch(`${API_URL}?action=create_zip&fileIds=${fileIds}`).then(r => r.json());
+        
+        if (res.success && res.downloadUrl) {
+            window.location.href = res.downloadUrl; 
+        } else {
+            throw new Error("Falha ao gerar o ZIP.");
+        }
       }
     } catch (e) {
-        alert("Erro ao processar o ZIP.");
+      alert("Erro ao processar o download em lote.");
     } finally {
       setIsProcessing(false);
       setSelectedPhotos([]); 
@@ -370,7 +386,6 @@ export default function App() {
       } else if (error.name !== 'AbortError') {
         await navigator.clipboard.writeText(caption).catch(()=>{});
         alert("O seu navegador não suporta a partilha. Texto copiado.");
-        downloadSinglePhoto(photo, true);
       }
     } finally {
       setDownloadingPhotoId(null);
@@ -418,7 +433,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal de Login Restrito */}
       {showLoginModal && (
         <div className="fixed inset-0 z-[110] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#141414] border border-[#E60000]/50 p-6 md:p-8 rounded-2xl max-w-sm w-full shadow-[0_0_50px_rgba(230,0,0,0.2)]">
@@ -435,7 +449,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Barra de Ações Fixa (Batch Renaming) */}
       {totalPending > 0 && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[80] animate-in slide-in-from-top-10 duration-300 w-full max-w-[90%] md:max-w-max">
           <div className="bg-[#141414]/95 border border-[#E5F20D] pl-5 pr-3 py-2 rounded-full shadow-[0_15px_50px_rgba(229,242,13,0.15)] flex flex-wrap items-center justify-between gap-4 backdrop-blur-xl">
@@ -512,7 +525,6 @@ export default function App() {
               if (viewMode === 'folders') {
                 const isMainCategory = path.length === 0;
                 
-                // Aplica o cache visual otimista: se tiver pendente de edição, mostra o nome novo.
                 const isPending = pendingRenames[item.id] !== undefined;
                 const displayName = isPending ? pendingRenames[item.id] : item.name;
 
@@ -550,7 +562,8 @@ export default function App() {
 
               return (
                 <div key={item.id} className={`relative aspect-[4/5] rounded-xl overflow-hidden border-2 cursor-pointer transition-all duration-200 ${isSelected ? `${CORES.bordaAmarela} shadow-[0_0_20px_rgba(229,242,13,0.3)]` : 'border-transparent hover:border-[#E60000]/50'}`}>
-                  <img src={item.thumbnailLink} loading="lazy" className="w-full h-full object-cover" onClick={(e) => { e.stopPropagation(); changePhoto(item); }} />
+                  {/* OTIMIZAÇÃO: =w400 carrega miniaturas leves e rápidas */}
+                  <img src={item.thumbnailLink.replace('=w800', '=w400')} loading="lazy" className="w-full h-full object-cover bg-[#1A1A1A] transition-opacity duration-300" onClick={(e) => { e.stopPropagation(); changePhoto(item); }} />
                   <div onClick={(e) => { e.stopPropagation(); setSelectedPhotos(prev => isSelected ? prev.filter(p => p.id !== item.id) : [...prev, item]) }} 
                        className={`absolute top-2 right-2 p-1.5 md:p-2 rounded-lg transition-all shadow-md backdrop-blur-sm ${isSelected ? `bg-[#E5F20D] text-black` : 'bg-black/60 text-white/80 hover:bg-[#E60000] hover:text-white border border-white/20'}`}>
                     {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
@@ -562,7 +575,6 @@ export default function App() {
         )}
       </main>
 
-      {/* MODAL DE FOTO EM TELA CHEIA */}
       {previewPhoto && (
         <div className="fixed inset-0 z-50 bg-[#0A0A0A] flex flex-col items-center justify-center" 
              onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
@@ -592,7 +604,8 @@ export default function App() {
               </button>
               <div className="relative w-full h-full flex items-center justify-center">
                  {isImageLoading && <div className="absolute inset-0 flex items-center justify-center z-40"><div className="w-6 h-6 border-2 border-white/10 border-t-[#E60000] rounded-full animate-spin"></div></div>}
-                 <img src={previewPhoto.thumbnailLink.replace('=w800', '=s0')} className={`max-w-full max-h-full object-contain select-none transition-opacity duration-300 ease-in-out ${isImageLoading ? 'opacity-0' : 'opacity-100'}`} onLoad={() => setIsImageLoading(false)} />
+                 {/* OTIMIZAÇÃO: =w2000 carrega muito rápido e mantém resolução para tela cheia */}
+                 <img src={previewPhoto.thumbnailLink.replace('=w800', '=w2000')} className={`max-w-full max-h-full object-contain select-none transition-opacity duration-300 ease-in-out ${isImageLoading ? 'opacity-0' : 'opacity-100'}`} onLoad={() => setIsImageLoading(false)} />
               </div>
               <button onClick={() => currentPreviewIndex < items.length - 1 && changePhoto(items[currentPreviewIndex + 1])} 
                       className={`absolute right-2 lg:right-6 p-2 text-white/40 hover:text-[#E5F20D] hidden md:block z-[60] transition-colors rounded-full ${currentPreviewIndex === items.length - 1 && 'opacity-0 pointer-events-none'}`}>
